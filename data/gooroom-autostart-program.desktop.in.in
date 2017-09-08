@@ -1,0 +1,9 @@
+[Desktop Entry]
+_Name=Gooroom Autostart Program
+Exec=gooroom-autostart-program
+Encoding=UTF-8
+Type=Application
+OnlyShowIn=XFCE;
+StartupNotify=false
+Terminal=false
+Hidden=false
