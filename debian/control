@@ -3,11 +3,13 @@ Section: misc
 Priority: optional
 Maintainer: gooroom <gooroom@gooroom.kr>
 Build-Depends: debhelper (>= 9),
+ autotools-dev,
+ autoconf,
+ automake,
  intltool,
+ libtool,
  xfce4-dev-tools,
  dh-autoreconf,
- automake,
- autoconf,
  pkg-config,
  libgtk-3-dev,
  libglib2.0-dev,
