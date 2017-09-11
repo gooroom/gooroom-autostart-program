@@ -3,6 +3,7 @@ Section: misc
 Priority: optional
 Maintainer: gooroom <gooroom@gooroom.kr>
 Build-Depends: debhelper (>= 9),
+ intltool,
  xfce4-dev-tools,
  dh-autoreconf,
  automake,
