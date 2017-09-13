@@ -15,7 +15,8 @@ Build-Depends: debhelper (>= 9),
  libglib2.0-dev,
  libjson-c-dev,
  libcurl4-gnutls-dev,
- libpolkit-gobject-1-dev (>= 0.103)
+ libxfconf-0-dev,
+ libdbus-glib-1-dev
 Standards-Version: 3.9.8
 
 Package: gooroom-autostart-program

@@ -31,7 +31,11 @@
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
 #include <glib-unix.h>
-#include <polkit/polkit.h>
+
+#include <dbus/dbus-glib.h>
+#include <dbus/dbus-glib-lowlevel.h>
+
+#include <xfconf/xfconf.h>
 
 #include "dockitem_file_template.h"
 
@@ -68,23 +72,6 @@ strtoday (const char *date /* yyyy-mm-dd */)
 
 	return -1;
 }
-
-static gboolean
-authenticate (const gchar *action_id)
-{
-	GPermission *permission;
-	permission = polkit_permission_new_sync (action_id, NULL, NULL, NULL);
-
-	if (!g_permission_get_allowed (permission)) {
-		if (g_permission_acquire (permission, NULL, NULL)) {
-			return TRUE;
-		}
-		return FALSE;
-	}
-
-	return TRUE;
-}
-
 
 static gchar *
 download_favicon (const gchar *favicon_url, gint num)
@@ -279,8 +266,8 @@ remove_all_dock_items ()
 	g_free (remove_dir);
 }
 
-static gboolean
-generate_dock_items (gpointer user_data)
+static void
+generate_dock_items (void)
 {
 	gchar *file = NULL;
 	gchar *data = NULL;
@@ -289,7 +276,7 @@ generate_dock_items (gpointer user_data)
 
     if (!g_file_test (file, G_FILE_TEST_EXISTS)) {
 		g_error ("No such file or directory : %s", file);
-		goto done;
+		goto out;
 	}
 	
 	g_file_get_contents (file, &data, NULL, NULL);
@@ -321,34 +308,26 @@ generate_dock_items (gpointer user_data)
 
 	g_free (data);
 
-done:
-	g_free (file);
 
-	return FALSE;
+out:
+	g_free (file);
 }
 
 static gboolean
 is_online_user (const gchar *username)
 {
 	gboolean ret = FALSE;
-	gchar *file = NULL;
 
-	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
-
-	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
-		struct passwd *entry = getpwnam (username);
-		if (entry) {
-			gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
-			if (g_strv_length (tokens) > 4 ) {
-				if (tokens[4] && (g_strcmp0 (tokens[4], "gooroom-online-account") == 0)) {
-					ret = TRUE;
-				}
+	struct passwd *entry = getpwnam (username);
+	if (entry) {
+		gchar **tokens = g_strsplit (entry->pw_gecos, ",", -1);
+		if (g_strv_length (tokens) > 4 ) {
+			if (tokens[4] && (g_strcmp0 (tokens[4], "gooroom-online-account") == 0)) {
+				ret = TRUE;
 			}
-			g_strfreev (tokens);
 		}
+		g_strfreev (tokens);
 	}
-
-	g_free (file);
 
 	return ret;
 }
@@ -389,8 +368,8 @@ check_shadow_expiry (long lastchg, int maxdays)
 	return daysleft;
 }
 
-static gboolean
-handle_password_expiration (gpointer user_data)
+static void
+handle_password_expiration (void)
 {
 	gchar *file = NULL;
 	gchar *data = NULL;
@@ -399,7 +378,7 @@ handle_password_expiration (gpointer user_data)
 
 	if (!g_file_test (file, G_FILE_TEST_EXISTS)) {
 		g_error ("No such file or directory : %s", file);
-		goto done;
+		goto out;
 	}
 	
 	g_file_get_contents (file, &data, NULL, NULL);
@@ -455,35 +434,176 @@ handle_password_expiration (gpointer user_data)
 	g_free (data);
 
 
-done:
+out:
 	g_free (file);
-
-	return FALSE;
 }
 
 static void
 reload_grac_service (void)
 {
+	GDBusProxy *proxy;
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE,
+			NULL,
+			"kr.gooroom.agent",
+			"/kr/gooroom/agent",
+			"kr.gooroom.agent",
+			NULL,
+			NULL);
+
+	if (proxy) {
+		const gchar *arg = "{\"module\":{\"module_name\":\"daemon_control\",\"task\":{\"task_name\":\"daemon_reload\",\"in\":{\"service\":\"grac-device-daemon.service\"}}}}";
+
+		g_dbus_proxy_call_sync (proxy, "do_task",
+				g_variant_new ("(s)", arg),
+				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+
+		g_object_unref (proxy);
+	}
+}
+
+static gboolean
+shutdown_system_cb (gpointer data)
+{
+	return FALSE;
+}
+
+static void
+dpms_control_cb (GDBusProxy *proxy,
+                 gchar *sender_name,
+                 gchar *signal_name,
+                 GVariant *parameters,
+                 gpointer data)
+{
+	XfconfChannel *channel = XFCONF_CHANNEL (data);
+
+	g_print ("signal name = %s\n", signal_name);
+
+	if (strcmp (signal_name, "dpms_on_x_off") == 0) {
+		if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_INT32)) {
+			gint value = -1;
+			g_variant_get (parameters, "i", &value);
+			g_print ("dpms value = %d\n", value);
+
+			if (value >= 0 && value <= 60) {
+				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
+				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
+			}
+		}
+	}
+}
+
+static void
+gooroom_agent_bind_signal (XfconfChannel *channel)
+{
+	GDBusProxy *proxy = NULL;
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE,
+			NULL,
+			"kr.gooroom.agent",
+			"/kr/gooroom/agent",
+			"kr.gooroom.agent",
+			NULL,
+			NULL);
+
+	if (proxy != NULL) {
+		g_signal_connect (proxy, "g-signal", G_CALLBACK (dpms_control_cb), channel);
+		g_object_unref (proxy);
+	}
+}
+
+static gboolean
+logout_session_cb (gpointer data)
+{
+	DBusGConnection *conn;
+	DBusGProxy      *proxy = NULL;
+	GError          *err = NULL;
+	gboolean         result = FALSE;
+
+	/* open session bus */
+	conn = dbus_g_bus_get (DBUS_BUS_SESSION, &err);
+	if (conn == NULL) {
+		goto error;
+	}
+
+	proxy = dbus_g_proxy_new_for_name_owner (conn,
+			"org.xfce.SessionManager",
+			"/org/xfce/SessionManager",
+			"org.xfce.Session.Manager",
+			&err);
+
+	result = dbus_g_proxy_call (proxy, "Logout", &err,
+							G_TYPE_BOOLEAN, FALSE,
+							G_TYPE_BOOLEAN, FALSE,
+							G_TYPE_INVALID, G_TYPE_INVALID);
+
+	if (proxy != NULL)
+		g_object_unref (proxy);
+
+error:
+	if (err)
+		g_error_free (err);
+
+	if (!result) {
+		g_timeout_add (100, (GSourceFunc) shutdown_system_cb, NULL);
+	}
+
+	gtk_main_quit ();
+
+	return FALSE;
+}
+
+static gboolean
+start_main_job (gpointer data)
+{
+	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
+		/* handle the Direct URL items */
+		generate_dock_items ();
+
+		/* password expiration warning */
+		handle_password_expiration ();
+
+		/* reload grac service */
+		reload_grac_service ();
+
 #if 0
-	if (!authenticate ("kr.gooroom.start.programs"))
-		return;
+		XfconfChannel *channel;
 
-	gchar *cmd, *pkexec;
+		channel = xfconf_channel_new ("xfce4-power-manager");
 
-	pkexec = g_find_program_in_path ("pkexec");
-	cmd = g_strdup_printf ("%s /usr/bin/grac-reloader.py", pkexec);
 
-	g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
-
-	g_free (pkexec);
-	g_free (cmd);
+		gooroom_agent_bind_signal (channel);
 #endif
+	} else {
+		GtkWidget *message = gtk_message_dialog_new (NULL,
+				GTK_DIALOG_MODAL,
+				GTK_MESSAGE_ERROR,
+				GTK_BUTTONS_OK,
+				_("Terminating Session"));
+
+		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
+				_("User's settings file was not created correctly.\nAfter 10 seconds, the user will be logged out."));
+
+		gtk_window_set_title (GTK_WINDOW (message), _("Notifications"));
+
+		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, NULL);
+
+		gtk_dialog_run (GTK_DIALOG (message));
+		gtk_widget_destroy (message);
+	}
+
+	g_free (file);
+
+	return FALSE;
 }
 
 int
 main (int argc, char **argv)
 {
-	gint exit_timeout = 100;
+	GError *error = NULL;
 
 	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
@@ -491,23 +611,24 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
-	/* reload grac service */
-	reload_grac_service ();
-
-	if (is_online_user (g_get_user_name ())) {
-		exit_timeout = 10000;
-
-		/* handle the Direct URL items */
-		remove_all_dock_items ();
-		g_timeout_add (3000, (GSourceFunc) generate_dock_items, NULL);
-
-		/* password expiration warning */
-		g_timeout_add (4000, (GSourceFunc) handle_password_expiration, NULL);
+	/* Initialize xfconf */
+	if (!xfconf_init (&error)) {
+		/* Print error and exit */
+		g_error ("Failed to connect to xfconf daemon: %s.", error->message);
+		g_error_free (error);
 	}
 
-	g_timeout_add (exit_timeout, (GSourceFunc) gtk_main_quit, NULL);
+	remove_all_dock_items ();
+
+	if (is_online_user (g_get_user_name ())) {
+		g_timeout_add (3000, (GSourceFunc) start_main_job, NULL);
+	} else {
+		g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
+	}
 
 	gtk_main ();
+
+	xfconf_shutdown ();
 
 	return 0;
 }
