@@ -24,16 +24,18 @@
 #include <string.h>
 #include <pwd.h>
 
+#include <dbus/dbus.h>
 #include <curl/curl.h>
 #include <json-c/json.h>
 
 #include <glib.h>
+#include <gio/gio.h>
 #include <gtk/gtk.h>
 #include <glib/gi18n.h>
 #include <glib-unix.h>
-
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-lowlevel.h>
+
 
 #include <xfconf/xfconf.h>
 
@@ -52,6 +54,27 @@ JSON_OBJECT_GET (json_object *root_obj, const char *key)
 	json_object_object_get_ex (root_obj, key, &ret_obj);
 
 	return ret_obj;
+}
+
+static gchar *
+get_grm_user_data (void)
+{
+	gchar *file = NULL;
+	gchar *data = NULL;
+
+	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+
+	if (!g_file_test (file, G_FILE_TEST_EXISTS)) {
+		g_error ("No such file or directory : %s", file);
+		goto error;
+	}
+	
+	g_file_get_contents (file, &data, NULL, NULL);
+
+error:
+	g_free (file);
+
+	return data;
 }
 
 static long
@@ -269,17 +292,7 @@ remove_all_dock_items ()
 static void
 generate_dock_items (void)
 {
-	gchar *file = NULL;
-	gchar *data = NULL;
-
-	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
-
-    if (!g_file_test (file, G_FILE_TEST_EXISTS)) {
-		g_error ("No such file or directory : %s", file);
-		goto out;
-	}
-	
-	g_file_get_contents (file, &data, NULL, NULL);
+	gchar *data = get_grm_user_data ();
 
 	if (data) {
 		enum json_tokener_error jerr = json_tokener_success;
@@ -307,10 +320,6 @@ generate_dock_items (void)
 	}
 
 	g_free (data);
-
-
-out:
-	g_free (file);
 }
 
 static gboolean
@@ -371,24 +380,14 @@ check_shadow_expiry (long lastchg, int maxdays)
 static void
 handle_password_expiration (void)
 {
-	gchar *file = NULL;
-	gchar *data = NULL;
-
-	file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
-
-	if (!g_file_test (file, G_FILE_TEST_EXISTS)) {
-		g_error ("No such file or directory : %s", file);
-		goto out;
-	}
-	
-	g_file_get_contents (file, &data, NULL, NULL);
+	gchar *data = get_grm_user_data ();
 
 	if (data) {
 		enum json_tokener_error jerr = json_tokener_success;
 		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
 		if (jerr == json_tokener_success) {
 			gboolean passwd_init = FALSE;
-			json_object *obj1 = NULL, *obj2 = NULL, *obj3= NULL;
+			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
 			json_object *obj2_1 = NULL, *obj2_2 = NULL, *obj2_3 = NULL;
 
 			obj1 = JSON_OBJECT_GET (root_obj, "data");
@@ -431,11 +430,8 @@ handle_password_expiration (void)
 		}
 		json_object_put (root_obj);
 	}
+
 	g_free (data);
-
-
-out:
-	g_free (file);
 }
 
 static void
@@ -463,92 +459,113 @@ reload_grac_service (void)
 	}
 }
 
-static gboolean
-shutdown_system_cb (gpointer data)
+static void
+dpms_off_time_set (gpointer user_data)
 {
-	return FALSE;
+	XfconfChannel *channel = XFCONF_CHANNEL (user_data);
+
+	gchar *data = get_grm_user_data ();
+
+	if (data) {
+		enum json_tokener_error jerr = json_tokener_success;
+		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+		if (jerr == json_tokener_success) {
+			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
+
+			obj1 = JSON_OBJECT_GET (root_obj, "data");
+			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
+			obj3 = JSON_OBJECT_GET (obj2, "dpms_off_time");
+			if (obj3) {
+				int dpms_off_time = json_object_get_int (obj3);
+				if (dpms_off_time >= 0 && dpms_off_time <= 60) {
+					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", dpms_off_time);
+					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", dpms_off_time);
+				}
+			}
+			json_object_put (obj1);
+			json_object_put (obj2);
+			json_object_put (obj3);
+		}
+		json_object_put (root_obj);
+	}
+
+	g_free (data);
 }
 
-static void
-dpms_control_cb (GDBusProxy *proxy,
-                 gchar *sender_name,
-                 gchar *signal_name,
-                 GVariant *parameters,
-                 gpointer data)
+static DBusHandlerResult
+handle_signal_cb (DBusConnection *connection, DBusMessage *msg, void *user_data)
 {
-	XfconfChannel *channel = XFCONF_CHANNEL (data);
+    if (dbus_message_is_signal (msg, "kr.gooroom.agent", "dpms_on_x_off")) {
+		if (user_data) {
+			XfconfChannel *channel = XFCONF_CHANNEL (user_data);
 
-	g_print ("signal name = %s\n", signal_name);
+			DBusError error;
+			dbus_error_init(&error);
 
-	if (strcmp (signal_name, "dpms_on_x_off") == 0) {
-		if (g_variant_is_of_type (parameters, G_VARIANT_TYPE_INT32)) {
-			gint value = -1;
-			g_variant_get (parameters, "i", &value);
-			g_print ("dpms value = %d\n", value);
+			gint32 value = 0;
+
+			if (!dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
+				g_error ("Could not read the value : %s", error.message);
+				dbus_error_free (&error);
+			}
 
 			if (value >= 0 && value <= 60) {
 				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
 				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
 			}
 		}
-	}
+    }
+
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
 }
 
 static void
-gooroom_agent_bind_signal (XfconfChannel *channel)
+gooroom_agent_bind_signal (gpointer data)
 {
-	GDBusProxy *proxy = NULL;
+	DBusError error;
 
-	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE,
-			NULL,
-			"kr.gooroom.agent",
-			"/kr/gooroom/agent",
-			"kr.gooroom.agent",
-			NULL,
-			NULL);
+	dbus_error_init (&error);
+	DBusConnection *conn = dbus_bus_get (DBUS_BUS_SYSTEM, &error);
 
-	if (proxy != NULL) {
-		g_signal_connect (proxy, "g-signal", G_CALLBACK (dpms_control_cb), channel);
-		g_object_unref (proxy);
+	if (dbus_error_is_set (&error)) {
+		g_error ("Could not get System BUS connection: %s", error.message);
+		dbus_error_free (&error);
+		return;
 	}
+
+	dbus_connection_setup_with_g_main (conn, NULL);
+
+	gchar *rule = "type='signal',interface='kr.gooroom.agent'";
+	dbus_bus_add_match (conn, rule, &error);
+
+	if (dbus_error_is_set (&error)) {
+		dbus_error_free (&error);
+		return;
+	}
+
+	dbus_connection_add_filter (conn, handle_signal_cb, data, NULL);
 }
 
 static gboolean
 logout_session_cb (gpointer data)
 {
-	DBusGConnection *conn;
-	DBusGProxy      *proxy = NULL;
-	GError          *err = NULL;
-	gboolean         result = FALSE;
+	gchar *cmd = NULL;
 
-	/* open session bus */
-	conn = dbus_g_bus_get (DBUS_BUS_SESSION, &err);
-	if (conn == NULL) {
-		goto error;
+	cmd = g_find_program_in_path ("xfce4-session-logout");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s -l", cmd);
+		if (!g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL)) {
+			gchar *systemctl = g_find_program_in_path ("systemctl");
+			if (systemctl) {
+				gchar *reboot = g_strdup_printf ("%s reboot -i", systemctl);
+				g_spawn_command_line_sync (reboot, NULL, NULL, NULL, NULL);
+				g_free (reboot);
+			}
+			g_free (systemctl);
+		}
+		g_free (cmdline);
 	}
-
-	proxy = dbus_g_proxy_new_for_name_owner (conn,
-			"org.xfce.SessionManager",
-			"/org/xfce/SessionManager",
-			"org.xfce.Session.Manager",
-			&err);
-
-	result = dbus_g_proxy_call (proxy, "Logout", &err,
-							G_TYPE_BOOLEAN, FALSE,
-							G_TYPE_BOOLEAN, FALSE,
-							G_TYPE_INVALID, G_TYPE_INVALID);
-
-	if (proxy != NULL)
-		g_object_unref (proxy);
-
-error:
-	if (err)
-		g_error_free (err);
-
-	if (!result) {
-		g_timeout_add (100, (GSourceFunc) shutdown_system_cb, NULL);
-	}
+	g_free (cmd);
 
 	gtk_main_quit ();
 
@@ -556,9 +573,10 @@ error:
 }
 
 static gboolean
-start_main_job (gpointer data)
+start_job (gpointer data)
 {
 	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
+
 	if (g_file_test (file, G_FILE_TEST_EXISTS)) {
 		/* handle the Direct URL items */
 		generate_dock_items ();
@@ -566,17 +584,12 @@ start_main_job (gpointer data)
 		/* password expiration warning */
 		handle_password_expiration ();
 
+		dpms_off_time_set (data);
+
 		/* reload grac service */
 		reload_grac_service ();
 
-#if 0
-		XfconfChannel *channel;
-
-		channel = xfconf_channel_new ("xfce4-power-manager");
-
-
-		gooroom_agent_bind_signal (channel);
-#endif
+		gooroom_agent_bind_signal (data);
 	} else {
 		GtkWidget *message = gtk_message_dialog_new (NULL,
 				GTK_DIALOG_MODAL,
@@ -585,11 +598,11 @@ start_main_job (gpointer data)
 				_("Terminating Session"));
 
 		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
-				_("User's settings file was not created correctly.\nAfter 10 seconds, the user will be logged out."));
+				_("Could not found user's settings file.\nAfter 10 seconds, the user will be logged out."));
 
 		gtk_window_set_title (GTK_WINDOW (message), _("Notifications"));
 
-		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, NULL);
+		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, data);
 
 		gtk_dialog_run (GTK_DIALOG (message));
 		gtk_widget_destroy (message);
@@ -604,6 +617,7 @@ int
 main (int argc, char **argv)
 {
 	GError *error = NULL;
+	XfconfChannel *channel = NULL;
 
 	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
 	bind_textdomain_codeset (GETTEXT_PACKAGE, "UTF-8");
@@ -611,22 +625,27 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
-	/* Initialize xfconf */
-	if (!xfconf_init (&error)) {
-		/* Print error and exit */
-		g_error ("Failed to connect to xfconf daemon: %s.", error->message);
-		g_error_free (error);
-	}
-
-	remove_all_dock_items ();
-
 	if (is_online_user (g_get_user_name ())) {
-		g_timeout_add (3000, (GSourceFunc) start_main_job, NULL);
+		/* Initialize xfconf */
+		if (!xfconf_init (&error)) {
+			/* Print error and exit */
+			g_error ("Failed to connect to xfconf daemon: %s.", error->message);
+			g_error_free (error);
+		}
+
+		channel = xfconf_channel_new ("xfce4-power-manager");
+
+		remove_all_dock_items ();
+
+		g_timeout_add (3000, (GSourceFunc) start_job, channel);
 	} else {
 		g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
 	}
 
 	gtk_main ();
+
+	if (channel)
+		g_object_unref (channel);
 
 	xfconf_shutdown ();
 

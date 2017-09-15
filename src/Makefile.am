@@ -9,6 +9,7 @@ gooroom_autostart_program_CFLAGS =		\
 	$(CURL_CFLAGS)		\
 	$(JSON_C_CFLAGS)	\
 	$(XFCONF_CFLAGS)	\
+	$(DBUS_CFLAGS)		\
 	$(DBUS_GLIB_CFLAGS)
 
 gooroom_autostart_program_LDADD =	\
@@ -17,4 +18,5 @@ gooroom_autostart_program_LDADD =	\
 	$(CURL_LIBS)	\
 	$(JSON_C_LIBS)	\
 	$(XFCONF_LIBS)	\
+	$(DBUS_LIBS)	\
 	$(DBUS_GLIB_LIBS)
