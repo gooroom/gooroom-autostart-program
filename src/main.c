@@ -99,30 +99,51 @@ strtoday (const char *date /* yyyy-mm-dd */)
 static gchar *
 download_favicon (const gchar *favicon_url, gint num)
 {
+	gboolean error = TRUE;
+
 	if (!g_file_test (g_get_user_cache_dir (), G_FILE_TEST_EXISTS)) {
-		return NULL;
+		goto error;
 	}
 
 	CURL *curl;
+	CURLcode res = CURLE_OK;
 	gchar *favicon_path = NULL;
 
 	curl_global_init (CURL_GLOBAL_ALL);
 
 	curl = curl_easy_init (); 
 
-	if (curl) {
-		favicon_path = g_strdup_printf ("%s/favicon-%.02d", g_get_user_cache_dir (), num);
-
-		FILE *fp = fopen (favicon_path, "w");
-		curl_easy_setopt (curl, CURLOPT_URL, favicon_url);
-		curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL);
-		curl_easy_setopt (curl, CURLOPT_WRITEDATA, fp);
-		curl_easy_perform (curl);
-		curl_easy_cleanup (curl);
-		fclose(fp);
+	if (!curl) {
+		goto error;
 	}
 
+	favicon_path = g_strdup_printf ("%s/favicon-%.02d", g_get_user_cache_dir (), num);
+
+	FILE *fp = fopen (favicon_path, "w");
+	if (!fp) {
+		goto error;
+	}
+
+	curl_easy_setopt (curl, CURLOPT_URL, favicon_url);
+	curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 3);
+	curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL);
+	curl_easy_setopt (curl, CURLOPT_WRITEDATA, fp);
+
+	res = curl_easy_perform (curl);
+	curl_easy_cleanup (curl);
+
+	fclose(fp);
+
+	if (res == CURLE_OK)
+		error = FALSE;
+
+error:
 	curl_global_cleanup ();
+
+	if (error) {
+		g_free (favicon_path);
+		favicon_path = NULL;
+	}
 
 	return favicon_path;
 }
@@ -152,7 +173,6 @@ get_desktop_directory (json_object *obj)
 	return desktop_dir;
 }
 
-
 static gboolean
 create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 {
@@ -163,37 +183,74 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 
 	keyfile = g_key_file_new ();
 
+#if 0
+	json_object *icon_obj = NULL, *exec_obj = NULL, *name_obj = NULL, *cmmt_obj = NULL;
+
+	json_object_object_get_ex (obj, "icon", &icon_obj);
+	json_object_object_get_ex (obj, "exec", &exec_obj);
+	json_object_object_get_ex (obj, "name", &name_obj);
+	json_object_object_get_ex (obj, "comment", &cmmt_obj);
+
+	if (icon_obj) {
+		const gchar *value = json_object_get_string (icon_obj);
+		if (g_str_has_prefix (value, "http://") || g_str_has_prefix (value, "https://")) {
+			gchar *icon_file = download_favicon (value, num);
+			if (icon_file) {
+				g_key_file_set_string (keyfile, "Desktop Entry", "Icon", icon_file);
+			} else {
+				g_key_file_set_string (keyfile, "Desktop Entry", "Icon", "plank");
+			}
+			g_free (icon_file);
+		} else {
+			g_key_file_set_string (keyfile, "Desktop Entry", "Icon", value);
+		}
+	}
+
+	if (exec_obj) {
+		const gchar *value = json_object_get_string (exec_obj);
+		g_key_file_set_string (keyfile, "Desktop Entry", "Exec", value);
+	}
+	if (name_obj) {
+		const gchar *value = json_object_get_string (name_obj);
+		g_key_file_set_string (keyfile, "Desktop Entry", "Name", value);
+	}
+	if (cmmt_obj) {
+		const gchar *value = json_object_get_string (cmmt_obj);
+		g_key_file_set_string (keyfile, "Desktop Entry", "Comment", value);
+	}
+#endif
+
 	json_object_object_foreach (obj, key, val) {
-		const char *value = json_object_get_string (val);
+		const gchar *value = json_object_get_string (val);
 		gchar *d_key = g_ascii_strdown (key, -1);
 
-		if (g_strcmp0 (d_key, "icon") == 0) {
+		if (d_key && g_strcmp0 (d_key, "icon") == 0) {
 			if (g_str_has_prefix (value, "http://") || g_str_has_prefix (value, "https://")) {
 				gchar *icon_file = download_favicon (value, num);
 				if (icon_file) {
 					g_key_file_set_string (keyfile, "Desktop Entry", "Icon", icon_file);
 					g_free (icon_file);
 				} else {
-					g_key_file_set_string (keyfile, "Desktop Entry", "Icon", "plank");
+					g_key_file_set_string (keyfile, "Desktop Entry", "Icon", "applications-other");
 				}
 			} else {
 				g_key_file_set_string (keyfile, "Desktop Entry", "Icon", value);
 			}
 		} else {
-			const char *new_key;
+			gchar *new_key = NULL;
 
 			if (g_strcmp0 (d_key, "name") == 0) {
-				new_key = "Name";
+				new_key = g_strdup ("Name");
 			} else if (g_strcmp0 (d_key, "comment") == 0) {
-				new_key = "Comment";
+				new_key = g_strdup ("Comment");
 			} else if (g_strcmp0 (d_key, "exec") == 0) {
-				new_key = "Exec";
-			} else {
-				new_key = NULL;
+				new_key = g_strdup ("Exec");
 			}
 
-			if (new_key)
+			if (new_key) {
 				g_key_file_set_string (keyfile, "Desktop Entry", new_key, value);
+				g_free (new_key);
+			}
 		}
 
 		g_free (d_key);
@@ -209,6 +266,19 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 	return ret;
 }
 
+static gboolean
+find_launcher (GList *list, const gchar *launcher)
+{
+	GList *l = NULL;
+	for (l = list; l; l = l->next) {
+		gchar *elm = (gchar *)l->data;
+		if (g_strrstr (elm, launcher) == NULL)
+			return TRUE;
+	}
+
+	return FALSE;
+}
+
 static void
 make_direct_url (json_object *root_obj)
 {
@@ -218,6 +288,38 @@ make_direct_url (json_object *root_obj)
 	json_object_object_get_ex (root_obj, "apps", &apps_obj);
 
 	g_return_if_fail (apps_obj != NULL);
+
+	GList *launchers = NULL;
+	gchar *output = NULL;
+	if (g_spawn_command_line_sync ("/usr/bin/gconftool-2 --get /apps/dockbarx/launchers", &output, NULL, NULL, NULL)) {
+		if (output) {
+			guint i = 0;
+			GString *old_launchers = g_string_new (NULL);
+			while (output[i] != '\0') {
+				if (output[i] != '[' && output[i] != ']' && output[i] != '\n') {
+					old_launchers = g_string_append_c (old_launchers, output[i]);
+				}
+				i++;
+			}
+
+			if (old_launchers) {
+				guint j = 0, len = 0;
+				gchar **strv = NULL;
+
+				strv = g_strsplit (old_launchers->str, ",", -1);
+				len = g_strv_length (strv);
+
+				for (j = 0; j < len; j++) {
+					launchers = g_list_append (launchers, g_strdup (strv[j]));
+				}
+
+				g_string_free (old_launchers, TRUE);
+				g_strfreev (strv);
+			}
+		}
+	}
+
+	g_free (output);
 
 	gint i = 0, len = 0;;
 	len = json_object_array_length (apps_obj);
@@ -240,26 +342,16 @@ make_direct_url (json_object *root_obj)
 				g_free (dt_dir_name);
 
 				if (create_desktop_file (dt_obj, dt_file_name, i)) {
-					gchar *di_file_dir = g_strdup_printf ("%s/plank/dock1/launchers", g_get_user_config_dir ());
-					if (g_file_test (di_file_dir, G_FILE_TEST_EXISTS)) {
-						/* create dock item file */
-						gchar *di_file_name = g_strdup_printf ("%s/plank/dock1/launchers/shortcut-%.02d.dockitem", g_get_user_config_dir (), i);
-						gchar *di_file_contents = g_strdup_printf (dockitem_file_template, dt_file_name);
-
-						g_file_set_contents (di_file_name, di_file_contents, -1, NULL);
-						g_free (di_file_name);
-						g_free (di_file_contents);
-					} else {
-						g_error ("No such file or directory : %s", di_file_dir);
+					gchar *launcher = g_strdup_printf ("shortcut-%.02d;%s", i, dt_file_name);
+					if (!find_launcher (launchers, launcher)) {
+						launchers = g_list_append (launchers, launcher);
 					}
-					g_free (di_file_dir);
 				} else {
 					g_error ("Could not create desktop file : %s", dt_file_name);
 				}
-
-				json_object_put (pos_obj);
-				json_object_put (dt_obj);
 			}
+			json_object_put (pos_obj);
+			json_object_put (dt_obj);
 
 			g_free (dt_file_name);
 
@@ -267,11 +359,44 @@ make_direct_url (json_object *root_obj)
 		}
 	}
 
+	if (launchers) {
+		guint len = g_list_length (launchers);
+		gchar **strv = g_try_malloc ((len + 1) * sizeof (gpointer));
+		if (strv) {
+			guint i = 0;
+			GList *l = NULL;
+			gchar *str_new_launchers = NULL;
+			gchar *cmd, *pkill, *cmdline;
+
+			for (l = launchers; l; l = g_list_next (l)) {
+				strv[i] = (gchar *)l->data;
+				i++;
+			}
+			strv[len] = NULL;
+
+			str_new_launchers = g_strjoinv (",", strv);
+
+			cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
+			g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+			g_free (cmd);
+
+			pkill = g_find_program_in_path ("pkill");
+			cmdline = g_strdup_printf ("%s -f 'python.*xfce4-dockbarx-plug'", pkill);
+			g_spawn_command_line_async (cmdline, NULL);
+			g_free (pkill);
+			g_free (cmdline);
+
+			g_free (str_new_launchers);
+		}
+
+		g_list_free_full (launchers, (GDestroyNotify) g_free);
+	}
+
 	json_object_put (apps_obj);
 }
 
 static void
-remove_all_dock_items ()
+remove_custom_desktop_files ()
 {
 	gchar *remove_dir = g_strdup_printf ("%s/applications/custom", g_get_user_data_dir ());
     if (g_file_test (remove_dir, G_FILE_TEST_EXISTS)) {
@@ -635,9 +760,9 @@ main (int argc, char **argv)
 
 		channel = xfconf_channel_new ("xfce4-power-manager");
 
-		remove_all_dock_items ();
+		remove_custom_desktop_files ();
 
-		g_timeout_add (3000, (GSourceFunc) start_job, channel);
+		g_timeout_add (200, (GSourceFunc) start_job, channel);
 	} else {
 		g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
 	}
