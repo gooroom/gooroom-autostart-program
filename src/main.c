@@ -285,7 +285,7 @@ make_direct_url (json_object *root_obj)
 	g_return_if_fail (root_obj != NULL);
 
 	json_object *apps_obj = NULL;
-	json_object_object_get_ex (root_obj, "apps", &apps_obj);
+	apps_obj = JSON_OBJECT_GET (root_obj, "apps");
 
 	g_return_if_fail (apps_obj != NULL);
 
@@ -330,9 +330,8 @@ make_direct_url (json_object *root_obj)
 		if (app_obj) {
 			gchar *dt_file_name = NULL;
 			json_object *dt_obj = NULL, *pos_obj = NULL;
-
-			json_object_object_get_ex (app_obj, "desktop", &dt_obj);
-			json_object_object_get_ex (app_obj, "position", &pos_obj);
+			dt_obj = JSON_OBJECT_GET (root_obj, "desktop");
+			pos_obj = JSON_OBJECT_GET (root_obj, "position");
 
 			if (dt_obj && pos_obj) {
 				gchar *dt_dir_name = get_desktop_directory (pos_obj);
@@ -350,12 +349,7 @@ make_direct_url (json_object *root_obj)
 					g_error ("Could not create desktop file : %s", dt_file_name);
 				}
 			}
-			json_object_put (pos_obj);
-			json_object_put (dt_obj);
-
 			g_free (dt_file_name);
-
-			json_object_put (app_obj);
 		}
 	}
 
@@ -391,8 +385,6 @@ make_direct_url (json_object *root_obj)
 
 		g_list_free_full (launchers, (GDestroyNotify) g_free);
 	}
-
-	json_object_put (apps_obj);
 }
 
 static void
@@ -436,12 +428,8 @@ generate_dock_items (void)
 					}
 				}
 			}
-			json_object_put (obj1);
-			json_object_put (obj2);
-			json_object_put (obj2_1);
-			json_object_put (obj3);
+			json_object_put (root_obj);
 		}
-		json_object_put (root_obj);
 	}
 
 	g_free (data);
@@ -548,12 +536,8 @@ handle_password_expiration (void)
 					}
 				}
 			}
-			json_object_put (obj1);
-			json_object_put (obj2);
-			json_object_put (obj2_1);
-			json_object_put (obj2_2);
+			json_object_put (root_obj);
 		}
-		json_object_put (root_obj);
 	}
 
 	g_free (data);
@@ -607,11 +591,8 @@ dpms_off_time_set (gpointer user_data)
 					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", dpms_off_time);
 				}
 			}
-			json_object_put (obj1);
-			json_object_put (obj2);
-			json_object_put (obj3);
+			json_object_put (root_obj);
 		}
-		json_object_put (root_obj);
 	}
 
 	g_free (data);
