@@ -272,8 +272,9 @@ find_launcher (GList *list, const gchar *launcher)
 	GList *l = NULL;
 	for (l = list; l; l = l->next) {
 		gchar *elm = (gchar *)l->data;
-		if (g_strrstr (elm, launcher) == NULL)
+		if (g_strrstr (elm, launcher) != NULL) {
 			return TRUE;
+		}
 	}
 
 	return FALSE;
@@ -330,8 +331,8 @@ make_direct_url (json_object *root_obj)
 		if (app_obj) {
 			gchar *dt_file_name = NULL;
 			json_object *dt_obj = NULL, *pos_obj = NULL;
-			dt_obj = JSON_OBJECT_GET (root_obj, "desktop");
-			pos_obj = JSON_OBJECT_GET (root_obj, "position");
+			dt_obj = JSON_OBJECT_GET (app_obj, "desktop");
+			pos_obj = JSON_OBJECT_GET (app_obj, "position");
 
 			if (dt_obj && pos_obj) {
 				gchar *dt_dir_name = get_desktop_directory (pos_obj);
