@@ -57,3 +57,12 @@ msgstr "알림"
 
 msgid "Terminating Session"
 msgstr "세션 종료"
+
+msgid "Update Blocking Function"
+msgstr "업데이트 차단 기능"
+
+msgid "Update blocking function has been enabled."
+msgstr "업데이트 차단 기능이 활성화 되었습니다."
+
+msgid "Update blocking function has been disabled."
+msgstr "업데이트 차단 기능이 비활성화 되었습니다."
