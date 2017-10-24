@@ -36,6 +36,7 @@
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-lowlevel.h>
 
+#include <libnotify/notify.h>
 
 #include <xfconf/xfconf.h>
 
@@ -634,7 +635,7 @@ dpms_off_time_set (gpointer user_data)
 static DBusHandlerResult
 handle_signal_cb (DBusConnection *connection, DBusMessage *msg, void *user_data)
 {
-    if (dbus_message_is_signal (msg, "kr.gooroom.agent", "dpms_on_x_off")) {
+	if (dbus_message_is_signal (msg, "kr.gooroom.agent", "dpms_on_x_off")) {
 		if (user_data) {
 			XfconfChannel *channel = XFCONF_CHANNEL (user_data);
 
@@ -643,15 +644,51 @@ handle_signal_cb (DBusConnection *connection, DBusMessage *msg, void *user_data)
 
 			gint32 value = 0;
 
-			if (!dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
+			if (dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
+				if (value >= 0 && value <= 60) {
+					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
+					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
+				}
+			} else {
 				g_error ("Could not read the value : %s", error.message);
 				dbus_error_free (&error);
 			}
+		}
+	} else if (dbus_message_is_signal (msg, "kr.gooroom.agent", "update_operation")) {
+		DBusError error;
+		dbus_error_init(&error);
 
-			if (value >= 0 && value <= 60) {
-				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
-				xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
+		gint32 value = -1;
+
+		if (dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
+			NotifyNotification *notification;
+			gchar *cmdline = NULL;
+			const gchar *message;
+			const gchar *icon = "software-update-available-symbolic";
+			const gchar *summary = _("Update Blocking Function");
+			if (value == 0) {
+				message = _("Update blocking function has been disabled.");
+				cmdline = g_find_program_in_path ("gooroom-update-launcher");
+			} else if (value == 1) {
+				message = _("Update blocking function has been enabled.");
+				gchar *cmd = g_find_program_in_path ("pkill");
+				if (cmd) cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
+				g_free (cmd);
 			}
+
+			g_spawn_command_line_async (cmdline, NULL);
+			g_free (cmdline);
+
+			notify_init (PACKAGE_NAME);
+			notification = notify_notification_new (summary, message, icon);
+
+			notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+			notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+			notify_notification_show (notification, NULL);
+			g_object_unref (notification);
+		} else {
+			g_error ("Could not read the value : %s", error.message);
+			dbus_error_free (&error);
 		}
     }
 
