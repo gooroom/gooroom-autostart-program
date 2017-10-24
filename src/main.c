@@ -267,6 +267,34 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 }
 
 static gboolean
+restart_dockbarx_async (gpointer data)
+{
+	gchar *cmd = g_find_program_in_path ("pkill");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s -f 'python.*xfce4-dockbarx-plug'", cmd);
+		g_spawn_command_line_async (cmdline, NULL);
+		g_free (cmdline);
+	}
+	g_free (cmd);
+
+	return FALSE;
+}
+
+static gboolean
+run_control_center_async (gpointer data)
+{
+	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s user", cmd);
+		g_spawn_command_line_async (cmdline, NULL);
+		g_free (cmdline);
+	}
+	g_free (cmd);
+
+	return FALSE;
+}
+
+static gboolean
 find_launcher (GList *list, const gchar *launcher)
 {
 	GList *l = NULL;
@@ -361,7 +389,6 @@ make_direct_url (json_object *root_obj)
 			guint i = 0;
 			GList *l = NULL;
 			gchar *str_new_launchers = NULL;
-			gchar *cmd, *pkill, *cmdline;
 
 			for (l = launchers; l; l = g_list_next (l)) {
 				strv[i] = (gchar *)l->data;
@@ -371,15 +398,11 @@ make_direct_url (json_object *root_obj)
 
 			str_new_launchers = g_strjoinv (",", strv);
 
-			cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
+			gchar *cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
 			g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
 			g_free (cmd);
 
-			pkill = g_find_program_in_path ("pkill");
-			cmdline = g_strdup_printf ("%s -f 'python.*xfce4-dockbarx-plug'", pkill);
-			g_spawn_command_line_async (cmdline, NULL);
-			g_free (pkill);
-			g_free (cmdline);
+			g_timeout_add (200, (GSourceFunc) restart_dockbarx_async, NULL);
 
 			g_free (str_new_launchers);
 		}
@@ -491,20 +514,6 @@ check_shadow_expiry (long lastchg, int maxdays)
 	return daysleft;
 }
 
-static gboolean
-launch_control_center (gpointer data)
-{
-	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
-	if (cmd) {
-		gchar *cmdline = g_strdup_printf ("%s user", cmd);
-		g_spawn_command_line_async (cmdline, NULL);
-		g_free (cmdline);
-	}
-	g_free (cmd);
-
-	return FALSE;
-}
-
 static void
 handle_password_expiration (void)
 {
@@ -559,7 +568,7 @@ handle_password_expiration (void)
 			json_object_put (root_obj);
 
 			if (need_change_passwd) {
-				g_timeout_add (100, (GSourceFunc) launch_control_center, NULL);
+				g_timeout_add (100, (GSourceFunc) run_control_center_async, NULL);
 			}
 		}
 	}
@@ -711,13 +720,13 @@ start_job (gpointer data)
 		/* handle the Direct URL items */
 		generate_dock_items ();
 
-		/* password expiration warning */
-		handle_password_expiration ();
-
 		dpms_off_time_set (data);
 
 		/* reload grac service */
 		reload_grac_service ();
+
+		/* password expiration warning */
+		handle_password_expiration ();
 
 		gooroom_agent_bind_signal (data);
 	} else {
