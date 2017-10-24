@@ -491,6 +491,20 @@ check_shadow_expiry (long lastchg, int maxdays)
 	return daysleft;
 }
 
+static gboolean
+launch_control_center (gpointer data)
+{
+	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s user", cmd);
+		g_spawn_command_line_async (cmdline, NULL);
+		g_free (cmdline);
+	}
+	g_free (cmd);
+
+	return FALSE;
+}
+
 static void
 handle_password_expiration (void)
 {
@@ -545,13 +559,7 @@ handle_password_expiration (void)
 			json_object_put (root_obj);
 
 			if (need_change_passwd) {
-				gchar *cmd = g_find_program_in_path ("gooroom-control-center");
-				if (cmd) {
-					gchar *cmdline = g_strdup_printf ("%s user", cmd);
-					g_spawn_command_line_async (cmdline, NULL);
-					g_free (cmdline);
-				}
-				g_free (cmd);
+				g_timeout_add (100, (GSourceFunc) launch_control_center, NULL);
 			}
 		}
 	}
@@ -576,9 +584,9 @@ reload_grac_service (void)
 	if (proxy) {
 		const gchar *arg = "{\"module\":{\"module_name\":\"daemon_control\",\"task\":{\"task_name\":\"daemon_reload\",\"in\":{\"service\":\"grac-device-daemon.service\"}}}}";
 
-		g_dbus_proxy_call_sync (proxy, "do_task",
+		g_dbus_proxy_call (proxy, "do_task",
 				g_variant_new ("(s)", arg),
-				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
 
 		g_object_unref (proxy);
 	}
