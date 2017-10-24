@@ -500,6 +500,7 @@ handle_password_expiration (void)
 		enum json_tokener_error jerr = json_tokener_success;
 		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
 		if (jerr == json_tokener_success) {
+			gboolean need_change_passwd = FALSE;
 			gboolean passwd_init = FALSE;
 			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
 			json_object *obj2_1 = NULL, *obj2_2 = NULL, *obj2_3 = NULL;
@@ -515,6 +516,7 @@ handle_password_expiration (void)
 					passwd_init = TRUE;
 					const gchar *msg = _("Your password has been issued temporarily.\nFor security reasons, please change your password immediately.");
 					show_message (_("Change Password"), msg, "dialog-error");
+					need_change_passwd = TRUE;
 				}
 			}
 
@@ -530,14 +532,27 @@ handle_password_expiration (void)
 						gchar *msg = g_strdup_printf (_("You have %d days to change your password.\nPlease change your password within %d days."), daysleft, daysleft);
 						show_message (_("Change Password"), msg, "dialog-warn");
 						g_free (msg);
+						need_change_passwd = TRUE;
 					} else if (daysleft == 0) {
 						show_message (_("Change Password"), _("Password change period is until today.\nPlease change your password today."), "dialog-warn");
+						need_change_passwd = TRUE;
 					} else if (daysleft < 0){
 						show_message (_("Change Password"), _("The password change period has already passed.\nFor security reasons, please change your password immediately."), "dialog-warn");
+						need_change_passwd = TRUE;
 					}
 				}
 			}
 			json_object_put (root_obj);
+
+			if (need_change_passwd) {
+				gchar *cmd = g_find_program_in_path ("gooroom-control-center");
+				if (cmd) {
+					gchar *cmdline = g_strdup_printf ("%s user", cmd);
+					g_spawn_command_line_async (cmdline, NULL);
+					g_free (cmdline);
+				}
+				g_free (cmd);
+			}
 		}
 	}
 
