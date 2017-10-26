@@ -578,6 +578,16 @@ handle_password_expiration (void)
 }
 
 static void
+reload_grac_service_done_cb (GObject *source, GAsyncResult *res, gpointer data)
+{
+	GDBusProxy *proxy = G_DBUS_PROXY (source);
+
+	g_dbus_proxy_call_finish (proxy, res, NULL);
+
+	g_object_unref (proxy);
+}
+
+static void
 reload_grac_service (void)
 {
 	GDBusProxy *proxy;
@@ -595,10 +605,9 @@ reload_grac_service (void)
 		const gchar *arg = "{\"module\":{\"module_name\":\"daemon_control\",\"task\":{\"task_name\":\"daemon_reload\",\"in\":{\"service\":\"grac-device-daemon.service\"}}}}";
 
 		g_dbus_proxy_call (proxy, "do_task",
-				g_variant_new ("(s)", arg),
-				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL, NULL);
-
-		g_object_unref (proxy);
+			g_variant_new ("(s)", arg),
+			G_DBUS_CALL_FLAGS_NONE, -1, NULL,
+			reload_grac_service_done_cb, NULL);
 	}
 }
 
