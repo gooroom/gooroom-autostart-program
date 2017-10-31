@@ -270,6 +270,8 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 static gboolean
 restart_dockbarx_async (gpointer data)
 {
+	g_spawn_command_line_sync ("xfce4-panel -r", NULL, NULL, NULL, NULL);
+
 	gchar *cmd = g_find_program_in_path ("pkill");
 	if (cmd) {
 		gchar *cmdline = g_strdup_printf ("%s -f 'python.*xfce4-dockbarx-plug'", cmd);
