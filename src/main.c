@@ -312,17 +312,39 @@ find_launcher (GList *list, const gchar *launcher)
 }
 
 static void
-make_direct_url (json_object *root_obj)
+dockbarx_launchers_set (GList *launchers)
 {
-	g_return_if_fail (root_obj != NULL);
+	g_return_if_fail (launchers != NULL);
 
-	json_object *apps_obj = NULL;
-	apps_obj = JSON_OBJECT_GET (root_obj, "apps");
+	guint len = g_list_length (launchers);
+	gchar **strv = g_try_malloc ((len + 1) * sizeof (gpointer));
+	if (strv) {
+		guint i = 0;
+		GList *l = NULL;
+		gchar *str_new_launchers = NULL;
 
-	g_return_if_fail (apps_obj != NULL);
+		for (l = launchers; l; l = g_list_next (l)) {
+			strv[i] = (gchar *)l->data;
+			i++;
+		}
+		strv[len] = NULL;
 
-	GList *launchers = NULL;
+		str_new_launchers = g_strjoinv (",", strv);
+
+		gchar *cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
+		g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
+		g_free (cmd);
+
+		g_free (str_new_launchers);
+	}
+}
+
+static GList *
+dockbarx_launchers_get (void)
+{
 	gchar *output = NULL;
+	GList *launchers = NULL;
+
 	if (g_spawn_command_line_sync ("/usr/bin/gconftool-2 --get /apps/dockbarx/launchers", &output, NULL, NULL, NULL)) {
 		if (output) {
 			guint i = 0;
@@ -342,16 +364,33 @@ make_direct_url (json_object *root_obj)
 				len = g_strv_length (strv);
 
 				for (j = 0; j < len; j++) {
-					launchers = g_list_append (launchers, g_strdup (strv[j]));
+					gchar *desktop_path = g_strrstr (strv[j], ";")+1;
+					if (g_file_test (desktop_path, G_FILE_TEST_EXISTS)) {
+						launchers = g_list_append (launchers, g_strdup (strv[j]));
+					}
 				}
 
 				g_string_free (old_launchers, TRUE);
 				g_strfreev (strv);
 			}
+			g_free (output);
 		}
 	}
 
-	g_free (output);
+	return launchers;
+}
+
+static void
+make_direct_url (json_object *root_obj)
+{
+	g_return_if_fail (root_obj != NULL);
+
+	json_object *apps_obj = NULL;
+	apps_obj = JSON_OBJECT_GET (root_obj, "apps");
+
+	g_return_if_fail (apps_obj != NULL);
+
+	GList *launchers = dockbarx_launchers_get ();
 
 	gint i = 0, len = 0;;
 	len = json_object_array_length (apps_obj);
@@ -385,33 +424,10 @@ make_direct_url (json_object *root_obj)
 		}
 	}
 
-	if (launchers) {
-		guint len = g_list_length (launchers);
-		gchar **strv = g_try_malloc ((len + 1) * sizeof (gpointer));
-		if (strv) {
-			guint i = 0;
-			GList *l = NULL;
-			gchar *str_new_launchers = NULL;
+	dockbarx_launchers_set (launchers);
 
-			for (l = launchers; l; l = g_list_next (l)) {
-				strv[i] = (gchar *)l->data;
-				i++;
-			}
-			strv[len] = NULL;
-
-			str_new_launchers = g_strjoinv (",", strv);
-
-			gchar *cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
-			g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
-			g_free (cmd);
-
-			g_timeout_add (200, (GSourceFunc) restart_dockbarx_async, NULL);
-
-			g_free (str_new_launchers);
-		}
-
-		g_list_free_full (launchers, (GDestroyNotify) g_free);
-	}
+	g_list_free_full (launchers, (GDestroyNotify) g_free);
+	g_timeout_add (200, (GSourceFunc) restart_dockbarx_async, NULL);
 }
 
 static void
