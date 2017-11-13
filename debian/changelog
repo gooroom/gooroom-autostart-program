@@ -1,3 +1,28 @@
+gooroom-autostart-program (0.1.1+grm1u1) unstable; urgency=medium
+
+  [ jongkyung.woo ]
+  * [5d47faf3] Support intltool at Build-Depends
+
+  [ cjheo ]
+  * [e83917cd] Add dependency packages
+  * [fd0127de] Add a function to apply dpms off time immediately.
+  * [eb566d63] Add the function to receive the signal for setting dpms
+  * [bb5b324a] Replace creating items for plank with creating items for dockbarx
+  * [ed3affc6] Don't need to use json_object_put function
+  * [e5b309f5] Fixed the bug for creating dockbarx launchers
+  * [71c63389] Run gooroom-control-center to change user's password when user click button in the password warning dialog.
+  * [f2587cf1] Run function to reload grac Asynchronously.
+  * [78892421] Delayed restart dockbarx.
+  * [52e1f717] Add the function to receive the signal to enable or disable update blocking.
+  * [ab3dbc75] Added and updated missing files for commit.
+  * [cbe157d9] Added the dbus callback function when reloading grac service.
+  * [dc801ad9] Make sure to load panel plugin for dockbarx.
+  * [f3437227] Modify to append only existing desktop file to dockbar item.
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Mon, 13 Nov 2017 20:09:33 +0900
+
 gooroom-autostart-program (0.1.0) unstable; urgency=medium
 
   * Initial Release.
