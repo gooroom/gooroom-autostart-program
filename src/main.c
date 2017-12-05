@@ -45,6 +45,8 @@
 #define	GRM_USER		".grm-user"
 
 
+static GDBusProxy *agent_proxy = NULL;
+
 json_object *
 JSON_OBJECT_GET (json_object *root_obj, const char *key)
 {
@@ -183,43 +185,6 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 	GKeyFile *keyfile = NULL;
 
 	keyfile = g_key_file_new ();
-
-#if 0
-	json_object *icon_obj = NULL, *exec_obj = NULL, *name_obj = NULL, *cmmt_obj = NULL;
-
-	json_object_object_get_ex (obj, "icon", &icon_obj);
-	json_object_object_get_ex (obj, "exec", &exec_obj);
-	json_object_object_get_ex (obj, "name", &name_obj);
-	json_object_object_get_ex (obj, "comment", &cmmt_obj);
-
-	if (icon_obj) {
-		const gchar *value = json_object_get_string (icon_obj);
-		if (g_str_has_prefix (value, "http://") || g_str_has_prefix (value, "https://")) {
-			gchar *icon_file = download_favicon (value, num);
-			if (icon_file) {
-				g_key_file_set_string (keyfile, "Desktop Entry", "Icon", icon_file);
-			} else {
-				g_key_file_set_string (keyfile, "Desktop Entry", "Icon", "plank");
-			}
-			g_free (icon_file);
-		} else {
-			g_key_file_set_string (keyfile, "Desktop Entry", "Icon", value);
-		}
-	}
-
-	if (exec_obj) {
-		const gchar *value = json_object_get_string (exec_obj);
-		g_key_file_set_string (keyfile, "Desktop Entry", "Exec", value);
-	}
-	if (name_obj) {
-		const gchar *value = json_object_get_string (name_obj);
-		g_key_file_set_string (keyfile, "Desktop Entry", "Name", value);
-	}
-	if (cmmt_obj) {
-		const gchar *value = json_object_get_string (cmmt_obj);
-		g_key_file_set_string (keyfile, "Desktop Entry", "Comment", value);
-	}
-#endif
 
 	json_object_object_foreach (obj, key, val) {
 		const gchar *value = json_object_get_string (val);
@@ -601,28 +566,26 @@ reload_grac_service_done_cb (GObject *source, GAsyncResult *res, gpointer data)
 	GDBusProxy *proxy = G_DBUS_PROXY (source);
 
 	g_dbus_proxy_call_finish (proxy, res, NULL);
-
-	g_object_unref (proxy);
 }
 
 static void
 reload_grac_service (void)
 {
-	GDBusProxy *proxy;
+	if (!agent_proxy) {
+		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.agent",
+				"/kr/gooroom/agent",
+				"kr.gooroom.agent",
+				NULL,
+				NULL);
+	}
 
-	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE,
-			NULL,
-			"kr.gooroom.agent",
-			"/kr/gooroom/agent",
-			"kr.gooroom.agent",
-			NULL,
-			NULL);
-
-	if (proxy) {
+	if (agent_proxy) {
 		const gchar *arg = "{\"module\":{\"module_name\":\"daemon_control\",\"task\":{\"task_name\":\"daemon_reload\",\"in\":{\"service\":\"grac-device-daemon.service\"}}}}";
 
-		g_dbus_proxy_call (proxy, "do_task",
+		g_dbus_proxy_call (agent_proxy, "do_task",
 			g_variant_new ("(s)", arg),
 			G_DBUS_CALL_FLAGS_NONE, -1, NULL,
 			reload_grac_service_done_cb, NULL);
@@ -659,94 +622,71 @@ dpms_off_time_set (gpointer user_data)
 	g_free (data);
 }
 
-static DBusHandlerResult
-handle_signal_cb (DBusConnection *connection, DBusMessage *msg, void *user_data)
+static void
+agent_signal_cb (GDBusProxy *proxy, gchar *sender_name, gchar *signal_name, GVariant *parameters, gpointer user_data)
 {
-	if (dbus_message_is_signal (msg, "kr.gooroom.agent", "dpms_on_x_off")) {
-		if (user_data) {
-			XfconfChannel *channel = XFCONF_CHANNEL (user_data);
+	if (g_str_equal (signal_name, "dpms_on_x_off")) {
 
-			DBusError error;
-			dbus_error_init(&error);
+		g_return_if_fail (user_data != NULL);
 
-			gint32 value = 0;
+		XfconfChannel *channel = XFCONF_CHANNEL (user_data);
 
-			if (dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
-				if (value >= 0 && value <= 60) {
-					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
-					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
-				}
-			} else {
-				g_error ("Could not read the value : %s", error.message);
-				dbus_error_free (&error);
-			}
+		gint32 value = 0;
+		g_variant_get (parameters, "(i)", &value);
+
+		if (value >= 0 && value <= 60) {
+			xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
+			xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
 		}
-	} else if (dbus_message_is_signal (msg, "kr.gooroom.agent", "update_operation")) {
-		DBusError error;
-		dbus_error_init(&error);
-
+	} else if (g_str_equal (signal_name, "update_operation")) {
 		gint32 value = -1;
+		g_variant_get (parameters, "(i)", &value);
 
-		if (dbus_message_get_args (msg, &error, DBUS_TYPE_INT32, &value, DBUS_TYPE_INVALID)) {
-			NotifyNotification *notification;
-			gchar *cmdline = NULL;
-			const gchar *message;
-			const gchar *icon = "software-update-available-symbolic";
-			const gchar *summary = _("Update Blocking Function");
-			if (value == 0) {
-				message = _("Update blocking function has been disabled.");
-				cmdline = g_find_program_in_path ("gooroom-update-launcher");
-			} else if (value == 1) {
-				message = _("Update blocking function has been enabled.");
-				gchar *cmd = g_find_program_in_path ("pkill");
-				if (cmd) cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
-				g_free (cmd);
-			}
-
-			g_spawn_command_line_async (cmdline, NULL);
-			g_free (cmdline);
-
-			notify_init (PACKAGE_NAME);
-			notification = notify_notification_new (summary, message, icon);
-
-			notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
-			notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
-			notify_notification_show (notification, NULL);
-			g_object_unref (notification);
-		} else {
-			g_error ("Could not read the value : %s", error.message);
-			dbus_error_free (&error);
+		NotifyNotification *notification;
+		gchar *cmdline = NULL;
+		const gchar *message;
+		const gchar *icon = "software-update-available-symbolic";
+		const gchar *summary = _("Update Blocking Function");
+		if (value == 0) {
+			message = _("Update blocking function has been disabled.");
+			cmdline = g_find_program_in_path ("gooroom-update-launcher");
+		} else if (value == 1) {
+			message = _("Update blocking function has been enabled.");
+			gchar *cmd = g_find_program_in_path ("pkill");
+			if (cmd) cmdline = g_strdup_printf ("%s -f '/usr/lib/gooroom/gooroomUpdate/gooroomUpdate.py'", cmd);
+			g_free (cmd);
 		}
-    }
 
-    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+		g_spawn_command_line_async (cmdline, NULL);
+		g_free (cmdline);
+
+		notify_init (PACKAGE_NAME);
+		notification = notify_notification_new (summary, message, icon);
+
+		notify_notification_set_urgency (notification, NOTIFY_URGENCY_NORMAL);
+		notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
+		notify_notification_show (notification, NULL);
+		g_object_unref (notification);
+	}
 }
 
 static void
 gooroom_agent_bind_signal (gpointer data)
 {
-	DBusError error;
-
-	dbus_error_init (&error);
-	DBusConnection *conn = dbus_bus_get (DBUS_BUS_SYSTEM, &error);
-
-	if (dbus_error_is_set (&error)) {
-		g_error ("Could not get System BUS connection: %s", error.message);
-		dbus_error_free (&error);
-		return;
+	if (!agent_proxy) {
+		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.agent",
+				"/kr/gooroom/agent",
+				"kr.gooroom.agent",
+				NULL,
+				NULL);
 	}
 
-	dbus_connection_setup_with_g_main (conn, NULL);
-
-	gchar *rule = "type='signal',interface='kr.gooroom.agent'";
-	dbus_bus_add_match (conn, rule, &error);
-
-	if (dbus_error_is_set (&error)) {
-		dbus_error_free (&error);
-		return;
+	if (agent_proxy) {
+		g_signal_connect (agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), data);
 	}
-
-	dbus_connection_add_filter (conn, handle_signal_cb, data, NULL);
 }
 
 static gboolean
@@ -770,13 +710,24 @@ logout_session_cb (gpointer data)
 	}
 	g_free (cmd);
 
-	gtk_main_quit ();
+	g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
 
 	return FALSE;
 }
 
 static gboolean
-start_job (gpointer data)
+start_job_on_offline (gpointer data)
+{
+	/* reload grac service */
+	reload_grac_service ();
+
+	g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
+
+	return FALSE;
+}
+
+static gboolean
+start_job_on_online (gpointer data)
 {
 	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
 
@@ -789,10 +740,10 @@ start_job (gpointer data)
 		/* reload grac service */
 		reload_grac_service ();
 
+		gooroom_agent_bind_signal (data);
+
 		/* password expiration warning */
 		handle_password_expiration ();
-
-		gooroom_agent_bind_signal (data);
 	} else {
 		GtkWidget *message = gtk_message_dialog_new (NULL,
 				GTK_DIALOG_MODAL,
@@ -828,6 +779,17 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
+	if (!agent_proxy) {
+		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.agent",
+				"/kr/gooroom/agent",
+				"kr.gooroom.agent",
+				NULL,
+				NULL);
+	}
+
 	if (is_online_user (g_get_user_name ())) {
 		/* Initialize xfconf */
 		if (!xfconf_init (&error)) {
@@ -840,12 +802,15 @@ main (int argc, char **argv)
 
 		remove_custom_desktop_files ();
 
-		g_timeout_add (200, (GSourceFunc) start_job, channel);
+		g_timeout_add (200, (GSourceFunc) start_job_on_online, channel);
 	} else {
-		g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
+		g_timeout_add (200, (GSourceFunc) start_job_on_offline, NULL);
 	}
 
 	gtk_main ();
+
+	if (agent_proxy)
+		g_object_unref (agent_proxy);
 
 	if (channel)
 		g_object_unref (channel);
