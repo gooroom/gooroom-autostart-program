@@ -239,6 +239,8 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 static gboolean
 restart_dockbarx_async (gpointer data)
 {
+	g_spawn_command_line_sync ("xfce4-panel -r", NULL, NULL, NULL, NULL);
+
 	gchar *cmd = g_find_program_in_path ("pkill");
 	if (cmd) {
 		gchar *cmdline = g_strdup_printf ("%s -f 'python.*xfce4-dockbarx-plug'", cmd);
@@ -675,15 +677,20 @@ handle_desktop_configuration (void)
 			obj3_2 = JSON_OBJECT_GET (obj2, "wallpaperNm");
 			obj3_3 = JSON_OBJECT_GET (obj2, "wallpaperFile");
 
-			const char *icon_theme = json_object_get_string (obj3_1);
-			const char *wallpaper_name = json_object_get_string (obj3_2);
-			const char *wallpaper_url = json_object_get_string (obj3_3);
+			if (obj3_1) {
+				const char *icon_theme = json_object_get_string (obj3_1);
 
-			/* set icon theme */
-			set_icon_theme (icon_theme);
+				/* set icon theme */
+				set_icon_theme (icon_theme);
+			}
 
-			/* set wallpaper */
-			set_wallpaper (wallpaper_name, wallpaper_url);
+			if (obj3_2 && obj3_3) {
+				const char *wallpaper_name = json_object_get_string (obj3_2);
+				const char *wallpaper_url = json_object_get_string (obj3_3);
+
+				/* set wallpaper */
+				set_wallpaper (wallpaper_name, wallpaper_url);
+			}
 
 			json_object_put (root_obj);
 		}
