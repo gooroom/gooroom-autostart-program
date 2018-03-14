@@ -1,3 +1,16 @@
+gooroom-autostart-program (0.1.2+grm1u1) unstable; urgency=medium
+
+  [ Heo, ChangJu ]
+  * [347fa309] Improving work to exchange data with gooroom agent
+
+  [ cjheo ]
+  * [861adddc] Support for setting icon theme and wallpaper on the Gooroom Platform Management Server
+  * [01f31ba9] Reinserting code to ensure that panel plugin for dockbarx is loaded
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Wed, 14 Mar 2018 17:56:15 +0900
+
 gooroom-autostart-program (0.1.1+grm1u1) unstable; urgency=medium
 
   [ jongkyung.woo ]
