@@ -45,6 +45,8 @@
 #define	GRM_USER		".grm-user"
 
 
+static guint timeout_id = 0;
+static gint not_matched_count = 0;
 static GDBusProxy *agent_proxy = NULL;
 
 json_object *
@@ -116,7 +118,6 @@ download_with_curl (const gchar *download_url, const gchar *download_path)
 	if (!curl)
 		goto error;
 
-
 	FILE *fp = fopen (download_path, "w");
 	if (!fp)
 		goto error;
@@ -152,6 +153,12 @@ download_favicon (const gchar *favicon_url, gint num)
 
 	if (!g_file_test (favicon_path, G_FILE_TEST_EXISTS))
 		return NULL;
+
+	gsize len = 0;
+	gchar *contents = NULL;
+	g_file_get_contents (favicon_path, &contents, &len, NULL);
+
+	if (len == 0) return NULL;
 
 	return favicon_path;
 }
@@ -428,9 +435,86 @@ icon_theme_exists (const gchar *icon_theme)
 	return ret;
 }
 
+static gboolean
+check_dockbarx_launchers (gpointer data)
+{
+	if (!data) {
+		if (timeout_id) {
+			g_source_remove (timeout_id);
+			timeout_id = 0;
+		}
+		not_matched_count = 0;
+
+		g_timeout_add (300, (GSourceFunc) restart_dockbarx_async, NULL);
+
+		return FALSE;
+	}
+
+	gboolean matched = TRUE;
+	GList *l = NULL;
+	GList *new_launchers = (GList *)data;
+	GList *old_launchers = dockbarx_launchers_get ();
+
+	for (l = new_launchers; l; l = l->next) {
+		const gchar *launcher = (const gchar *)l->data;
+		if (!find_launcher (old_launchers, launcher)) {
+			matched = FALSE;
+			break;
+		}
+	}
+
+	g_list_free_full (old_launchers, (GDestroyNotify) g_free);
+
+	if (!matched) {
+		if (not_matched_count > 3) {
+			if (timeout_id) {
+				g_source_remove (timeout_id);
+				timeout_id = 0;
+			}
+
+			not_matched_count = 0;
+
+			GtkWidget *dialog = gtk_message_dialog_new (NULL,
+					GTK_DIALOG_MODAL,
+					GTK_MESSAGE_ERROR,
+					GTK_BUTTONS_OK,
+					_("User Configuration Error"));
+
+			gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog),
+					_("Failed to set user's favorite menu.\nPlease login again."));
+			gtk_window_set_title (GTK_WINDOW (dialog), _("Warning"));
+			gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
+
+			gtk_dialog_run (GTK_DIALOG (dialog));
+			gtk_widget_destroy (dialog);
+
+			return FALSE;
+		}
+
+//		if (not_matched_count == 3) {
+//			dockbarx_launchers_set (new_launchers);
+//		}
+
+		not_matched_count++;
+
+		return TRUE;
+	}
+
+	if (timeout_id) {
+		g_source_remove (timeout_id);
+		timeout_id = 0;
+	}
+
+	not_matched_count = 0;
+
+	g_list_free_full (new_launchers, (GDestroyNotify) g_free);
+	g_timeout_add (300, (GSourceFunc) restart_dockbarx_async, NULL);
+
+	return FALSE;
+}
 
 static void
-make_direct_url (json_object *root_obj)
+make_direct_url (json_object *root_obj, GList *launchers)
 {
 	g_return_if_fail (root_obj != NULL);
 
@@ -438,8 +522,6 @@ make_direct_url (json_object *root_obj)
 	apps_obj = JSON_OBJECT_GET (root_obj, "apps");
 
 	g_return_if_fail (apps_obj != NULL);
-
-	GList *launchers = dockbarx_launchers_get ();
 
 	gint i = 0, len = 0;;
 	len = json_object_array_length (apps_obj);
@@ -473,10 +555,7 @@ make_direct_url (json_object *root_obj)
 		}
 	}
 
-	dockbarx_launchers_set (launchers);
-
-	g_list_free_full (launchers, (GDestroyNotify) g_free);
-	g_timeout_add (200, (GSourceFunc) restart_dockbarx_async, NULL);
+//	dockbarx_launchers_set (launchers);
 }
 
 static void
@@ -499,8 +578,9 @@ remove_custom_desktop_files ()
 }
 
 static void
-generate_dock_items (void)
+dock_launcher_update (void)
 {
+	GList *new_launchers = NULL;
 	gchar *data = get_grm_user_data ();
 
 	if (data) {
@@ -516,7 +596,8 @@ generate_dock_items (void)
 				const char *value = json_object_get_string (obj2_1);
 				if (g_strcmp0 (value, g_get_user_name ()) == 0) {
 					if (obj3) {
-						make_direct_url (obj3);
+						new_launchers = dockbarx_launchers_get ();
+						make_direct_url (obj3, new_launchers);
 					}
 				}
 			}
@@ -525,6 +606,10 @@ generate_dock_items (void)
 	}
 
 	g_free (data);
+
+	if (new_launchers) {
+		timeout_id = g_timeout_add (500, (GSourceFunc) check_dockbarx_launchers, new_launchers);
+	}
 }
 
 static gboolean
@@ -670,7 +755,7 @@ handle_desktop_configuration (void)
 		enum json_tokener_error jerr = json_tokener_success;
 		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
 		if (jerr == json_tokener_success) {
-            json_object *obj1 = NULL, *obj2 = NULL, *obj3_1 = NULL, *obj3_2 = NULL, *obj3_3 = NULL;
+			json_object *obj1 = NULL, *obj2 = NULL, *obj3_1 = NULL, *obj3_2 = NULL, *obj3_3 = NULL;
 			obj1 = JSON_OBJECT_GET (root_obj, "data");
 			obj2 = JSON_OBJECT_GET (obj1, "desktopInfo");
 			obj3_1 = JSON_OBJECT_GET (obj2, "themeNm");
@@ -937,7 +1022,7 @@ start_job_on_online (gpointer data)
 		handle_desktop_configuration ();
 
 		/* handle the Direct URL items */
-		generate_dock_items ();
+		dock_launcher_update ();
 
 		dpms_off_time_set (data);
 
