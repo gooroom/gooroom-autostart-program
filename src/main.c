@@ -555,7 +555,7 @@ make_direct_url (json_object *root_obj, GList *launchers)
 		}
 	}
 
-//	dockbarx_launchers_set (launchers);
+	dockbarx_launchers_set (launchers);
 }
 
 static void
