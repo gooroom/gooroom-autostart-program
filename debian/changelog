@@ -1,3 +1,13 @@
+gooroom-autostart-program (0.1.3+grm1u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [626c0e27] Add code to ensure dockbarx launcher settings
+  * [0ce44e17] uncomment dockbarx_launchers_set
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Tue, 26 Jun 2018 11:12:01 +0900
+
 gooroom-autostart-program (0.1.2+grm1u1) unstable; urgency=medium
 
   [ Heo, ChangJu ]
