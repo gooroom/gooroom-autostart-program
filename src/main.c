@@ -39,6 +39,7 @@
 
 #include <xfconf/xfconf.h>
 #include <libxfce4util/libxfce4util.h>
+#include <gconf/gconf-client.h>
 
 #include "dockitem_file_template.h"
 
@@ -274,9 +275,9 @@ run_control_center_async (gpointer data)
 }
 
 static gboolean
-find_launcher (GList *list, const gchar *launcher)
+find_launcher (GSList *list, const gchar *launcher)
 {
-	GList *l = NULL;
+	GSList *l = NULL;
 	for (l = list; l; l = l->next) {
 		gchar *elm = (gchar *)l->data;
 		if (g_strrstr (elm, launcher) != NULL) {
@@ -288,72 +289,39 @@ find_launcher (GList *list, const gchar *launcher)
 }
 
 static void
-dockbarx_launchers_set (GList *launchers)
+dockbarx_launchers_set (GSList *launchers)
 {
 	g_return_if_fail (launchers != NULL);
 
-	guint len = g_list_length (launchers);
-	gchar **strv = g_try_malloc ((len + 1) * sizeof (gpointer));
-	if (strv) {
-		guint i = 0;
-		GList *l = NULL;
-		gchar *str_new_launchers = NULL;
+	GConfClient *client = NULL;
 
-		for (l = launchers; l; l = g_list_next (l)) {
-			strv[i] = (gchar *)l->data;
-			i++;
-		}
-		strv[len] = NULL;
-
-		str_new_launchers = g_strjoinv (",", strv);
-
-		gchar *cmd = g_strdup_printf ("/usr/bin/gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers \"[%s]\"", str_new_launchers);
-		g_spawn_command_line_sync (cmd, NULL, NULL, NULL, NULL);
-		g_free (cmd);
-
-		g_free (str_new_launchers);
-	}
+	client = gconf_client_get_default ();
+	gconf_client_set_list (client, "/apps/dockbarx/launchers", GCONF_VALUE_STRING, launchers, NULL);
+	g_object_unref (client);
 }
 
-static GList *
+static GSList *
 dockbarx_launchers_get (void)
 {
-	gchar *output = NULL;
-	GList *launchers = NULL;
+	GConfClient *client = NULL;
+	GSList *old_launchers, *new_launchers = NULL;
 
-	if (g_spawn_command_line_sync ("/usr/bin/gconftool-2 --get /apps/dockbarx/launchers", &output, NULL, NULL, NULL)) {
-		if (output) {
-			guint i = 0;
-			GString *old_launchers = g_string_new (NULL);
-			while (output[i] != '\0') {
-				if (output[i] != '[' && output[i] != ']' && output[i] != '\n') {
-					old_launchers = g_string_append_c (old_launchers, output[i]);
-				}
-				i++;
-			}
+	client = gconf_client_get_default ();
+	old_launchers = gconf_client_get_list (client, "/apps/dockbarx/launchers", GCONF_VALUE_STRING, NULL);
 
-			if (old_launchers) {
-				guint j = 0, len = 0;
-				gchar **strv = NULL;
-
-				strv = g_strsplit (old_launchers->str, ",", -1);
-				len = g_strv_length (strv);
-
-				for (j = 0; j < len; j++) {
-					gchar *desktop_path = g_strrstr (strv[j], ";")+1;
-					if (g_file_test (desktop_path, G_FILE_TEST_EXISTS)) {
-						launchers = g_list_append (launchers, g_strdup (strv[j]));
-					}
-				}
-
-				g_string_free (old_launchers, TRUE);
-				g_strfreev (strv);
-			}
-			g_free (output);
+	GSList *l = NULL;
+	for (l = old_launchers; l != NULL; l = l->next) {
+		gchar *launcher = (gchar *)l->data;
+		gchar *desktop = g_strrstr (launcher, ";")+1;
+		if (g_file_test (desktop, G_FILE_TEST_EXISTS)) {
+			new_launchers = g_slist_append (new_launchers, g_strdup (launcher));
 		}
 	}
 
-	return launchers;
+	g_object_unref (client);
+	g_slist_free_full (old_launchers, (GDestroyNotify) g_free);
+
+	return new_launchers;
 }
 
 static gchar *
@@ -451,9 +419,9 @@ check_dockbarx_launchers (gpointer data)
 	}
 
 	gboolean matched = TRUE;
-	GList *l = NULL;
-	GList *new_launchers = (GList *)data;
-	GList *old_launchers = dockbarx_launchers_get ();
+	GSList *l = NULL;
+	GSList *new_launchers = (GSList *)data;
+	GSList *old_launchers = dockbarx_launchers_get ();
 
 	for (l = new_launchers; l; l = l->next) {
 		const gchar *launcher = (const gchar *)l->data;
@@ -463,7 +431,7 @@ check_dockbarx_launchers (gpointer data)
 		}
 	}
 
-	g_list_free_full (old_launchers, (GDestroyNotify) g_free);
+	g_slist_free_full (old_launchers, (GDestroyNotify) g_free);
 
 	if (!matched) {
 		if (not_matched_count > 3) {
@@ -491,10 +459,6 @@ check_dockbarx_launchers (gpointer data)
 			return FALSE;
 		}
 
-//		if (not_matched_count == 3) {
-//			dockbarx_launchers_set (new_launchers);
-//		}
-
 		not_matched_count++;
 
 		return TRUE;
@@ -507,14 +471,14 @@ check_dockbarx_launchers (gpointer data)
 
 	not_matched_count = 0;
 
-	g_list_free_full (new_launchers, (GDestroyNotify) g_free);
+	g_slist_free_full (new_launchers, (GDestroyNotify) g_free);
 	g_timeout_add (300, (GSourceFunc) restart_dockbarx_async, NULL);
 
 	return FALSE;
 }
 
 static void
-make_direct_url (json_object *root_obj, GList *launchers)
+make_direct_url (json_object *root_obj, GSList *launchers)
 {
 	g_return_if_fail (root_obj != NULL);
 
@@ -545,7 +509,7 @@ make_direct_url (json_object *root_obj, GList *launchers)
 				if (create_desktop_file (dt_obj, dt_file_name, i)) {
 					gchar *launcher = g_strdup_printf ("shortcut-%.02d;%s", i, dt_file_name);
 					if (!find_launcher (launchers, launcher)) {
-						launchers = g_list_append (launchers, launcher);
+						launchers = g_slist_append (launchers, launcher);
 					}
 				} else {
 					g_error ("Could not create desktop file : %s", dt_file_name);
@@ -580,7 +544,7 @@ remove_custom_desktop_files ()
 static void
 dock_launcher_update (void)
 {
-	GList *new_launchers = NULL;
+	GSList *new_launchers = NULL;
 	gchar *data = get_grm_user_data ();
 
 	if (data) {
