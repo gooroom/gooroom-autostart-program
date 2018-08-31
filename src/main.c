@@ -23,6 +23,7 @@
 #include <stdio.h>
 #include <string.h>
 #include <pwd.h>
+#include <sys/stat.h>
 
 #include <dbus/dbus.h>
 #include <curl/curl.h>
@@ -153,15 +154,22 @@ download_favicon (const gchar *favicon_url, gint num)
 	download_with_curl (favicon_url, favicon_path);
 
 	if (!g_file_test (favicon_path, G_FILE_TEST_EXISTS))
-		return NULL;
+		goto error;
 
-	gsize len = 0;
-	gchar *contents = NULL;
-	g_file_get_contents (favicon_path, &contents, &len, NULL);
+	struct stat st;
+	if (lstat (favicon_path, &st) == -1)
+		goto error;
 
-	if (len == 0) return NULL;
+	if (st.st_size == 0)
+		goto error;
 
 	return favicon_path;
+
+
+error:
+	g_free (favicon_path);
+
+	return g_strdup ("applications-other");
 }
 
 static gchar *
