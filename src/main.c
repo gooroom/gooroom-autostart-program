@@ -1004,7 +1004,7 @@ start_job_on_online (gpointer data)
 		gooroom_agent_bind_signal (data);
 
 		/* password expiration warning */
-		handle_password_expiration ();
+//		handle_password_expiration ();
 	} else {
 		GtkWidget *message = gtk_message_dialog_new (NULL,
 				GTK_DIALOG_MODAL,
