@@ -245,6 +245,8 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 	g_key_file_set_string (keyfile, "Desktop Entry", "Type", "Application");
 	g_key_file_set_string (keyfile, "Desktop Entry", "Terminal", "false");
 	g_key_file_set_string (keyfile, "Desktop Entry", "StartupNotify", "true");
+	/* we don't want to show in application launcher */
+	g_key_file_set_string (keyfile, "Desktop Entry", "NoDisplay", "true");
 
 	ret = g_key_file_save_to_file (keyfile, dt_file_name, NULL);
 	g_key_file_free (keyfile);
