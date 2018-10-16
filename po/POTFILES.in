@@ -1,2 +1,3 @@
 src/main.c
 data/gooroom-autostart-program.desktop.in.in
+data/kr.gooroom.autostart.program.policy.in.in

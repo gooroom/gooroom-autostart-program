@@ -28,8 +28,10 @@
 #include <dbus/dbus.h>
 #include <curl/curl.h>
 #include <json-c/json.h>
+#include <polkit/polkit.h>
 
 #include <glib.h>
+#include <glib/gstdio.h>
 #include <gio/gio.h>
 #include <gtk/gtk.h>
 #include <glib-unix.h>
@@ -50,6 +52,23 @@
 static guint timeout_id = 0;
 static gint not_matched_count = 0;
 static GDBusProxy *agent_proxy = NULL;
+
+
+static gboolean
+authenticate (const gchar *action_id)
+{
+	GPermission *permission;
+	permission = polkit_permission_new_sync (action_id, NULL, NULL, NULL);
+
+	if (!g_permission_get_allowed (permission)) {
+		if (g_permission_acquire (permission, NULL, NULL)) {
+			return TRUE;
+		}
+		return FALSE;
+	}
+
+	return TRUE;
+}
 
 json_object *
 JSON_OBJECT_GET (json_object *root_obj, const char *key)
@@ -120,12 +139,12 @@ download_with_curl (const gchar *download_url, const gchar *download_path)
 	if (!curl)
 		goto error;
 
-	FILE *fp = fopen (download_path, "w");
+	FILE *fp = fopen (download_path, "wb");
 	if (!fp)
 		goto error;
 
 	curl_easy_setopt (curl, CURLOPT_URL, download_url);
-	curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 3);
+	curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 10);
 	curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL);
 	curl_easy_setopt (curl, CURLOPT_WRITEDATA, fp);
 
@@ -150,12 +169,14 @@ download_favicon (const gchar *favicon_url, gint num)
 	gchar *favicon_path = NULL;
 
 	favicon_path = g_strdup_printf ("%s/favicon-%.02d", g_get_user_cache_dir (), num);
+	g_remove (favicon_path);
 
 	download_with_curl (favicon_url, favicon_path);
 
 	if (!g_file_test (favicon_path, G_FILE_TEST_EXISTS))
 		goto error;
 
+	// check file size
 	struct stat st;
 	if (lstat (favicon_path, &st) == -1)
 		goto error;
@@ -683,6 +704,7 @@ set_wallpaper (const char *wallpaper_name, const gchar *wallpaper_url)
 
 			/* build download path */
 			wallpaper_path = g_build_filename (background_dir, filename, NULL);
+			g_remove (wallpaper_path);
 
 			download_with_curl (wallpaper_url, wallpaper_path);
 
@@ -978,10 +1000,50 @@ logout_session_cb (gpointer data)
 static gboolean
 start_job_on_offline (gpointer data)
 {
-	/* reload grac service */
-	reload_grac_service ();
+	if (!authenticate ("kr.gooroom.autostart.program.systemctl"))
+		return FALSE;
 
-	g_timeout_add (100, (GSourceFunc) gtk_main_quit, NULL);
+	GDBusProxy  *proxy = NULL;
+	gboolean     success = FALSE;
+	const gchar *service_name = "grac-device-daemon.service";
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE,
+			NULL,
+			"org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1",
+			"org.freedesktop.systemd1.Manager",
+			NULL, NULL);
+
+	if (proxy) {
+		GVariant *variant = NULL;
+		variant = g_dbus_proxy_call_sync (proxy, "RestartUnit",
+				g_variant_new ("(ss)", service_name, "replace"),
+				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+
+		if (variant) {
+			g_variant_unref (variant);
+			success = TRUE;
+		}
+
+		g_object_unref (proxy);
+	}
+
+	if (!success) {
+		GtkWidget *dlg = gtk_message_dialog_new (NULL,
+				GTK_DIALOG_MODAL,
+				GTK_MESSAGE_INFO,
+				GTK_BUTTONS_CLOSE,
+				NULL);
+
+		const gchar *secondary_text = _("Failed to restart GRAC service.\nPlease login again.");
+		gtk_window_set_title (GTK_WINDOW (dlg), _("GRAC Service Start Failure"));
+		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dlg), "%s", secondary_text);
+		gtk_dialog_run (GTK_DIALOG (dlg));
+		gtk_widget_destroy (dlg);
+	}
+
+	g_timeout_add (200, (GSourceFunc) gtk_main_quit, NULL);
 
 	return FALSE;
 }
@@ -1012,12 +1074,12 @@ start_job_on_online (gpointer data)
 				GTK_DIALOG_MODAL,
 				GTK_MESSAGE_ERROR,
 				GTK_BUTTONS_OK,
-				_("Terminating Session"));
+				NULL);
 
 		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (message),
 				_("Could not found user's settings file.\nAfter 10 seconds, the user will be logged out."));
 
-		gtk_window_set_title (GTK_WINDOW (message), _("Notifications"));
+		gtk_window_set_title (GTK_WINDOW (message), _("Terminating Session"));
 
 		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, data);
 
@@ -1033,7 +1095,6 @@ start_job_on_online (gpointer data)
 int
 main (int argc, char **argv)
 {
-	GError *error = NULL;
 	XfconfChannel *channel = NULL;
 
 	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
@@ -1054,6 +1115,7 @@ main (int argc, char **argv)
 	}
 
 	if (is_online_user (g_get_user_name ())) {
+		GError *error = NULL;
 		/* Initialize xfconf */
 		if (!xfconf_init (&error)) {
 			/* Print error and exit */

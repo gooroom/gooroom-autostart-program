@@ -14,7 +14,8 @@ gooroom_autostart_program_CFLAGS =	\
 	$(DBUS_GLIB_CFLAGS)	\
 	$(LIBNOTIFY_CFLAGS)	\
 	$(LIBXFCE4UTIL_CFLAGS)	\
-	$(GCONF_CFLAGS)
+	$(GCONF_CFLAGS)	\
+	$(POLKIT_CFLAGS)
 
 gooroom_autostart_program_LDADD =	\
 	$(GLIB_LIBS)	\
@@ -26,4 +27,5 @@ gooroom_autostart_program_LDADD =	\
 	$(DBUS_GLIB_LIBS)	\
 	$(LIBNOTIFY_LIBS)	\
 	$(LIBXFCE4UTIL_LIBS)	\
-	$(GCONF_LIBS)
+	$(GCONF_LIBS)	\
+	$(POLKIT_LIBS)
