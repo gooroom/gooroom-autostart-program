@@ -32,7 +32,6 @@
 
 #include <glib.h>
 #include <glib/gstdio.h>
-#include <gio/gio.h>
 #include <gtk/gtk.h>
 #include <glib-unix.h>
 #include <dbus/dbus-glib.h>
@@ -54,6 +53,8 @@ static gint not_matched_count = 0;
 static GDBusProxy *agent_proxy = NULL;
 
 
+
+
 static gboolean
 authenticate (const gchar *action_id)
 {
@@ -68,6 +69,120 @@ authenticate (const gchar *action_id)
 	}
 
 	return TRUE;
+}
+
+static void
+dpms_off_time_update (gint32 value, XfconfChannel *channel)
+{
+	if (value >= 0 && value <= 60) {
+		xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
+		xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
+	}
+}
+
+static GDBusProxy *
+agent_proxy_get (void)
+{
+	if (agent_proxy == NULL) {
+		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+				G_DBUS_CALL_FLAGS_NONE,
+				NULL,
+				"kr.gooroom.agent",
+				"/kr/gooroom/agent",
+				"kr.gooroom.agent",
+				NULL,
+				NULL);
+	}
+
+	return agent_proxy;
+}
+
+static gboolean
+get_object_path (gchar **object_path, const gchar *service_name)
+{
+	GVariant   *variant;
+	GDBusProxy *proxy;
+	GError     *error = NULL;
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE, NULL,
+			"org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1",
+			"org.freedesktop.systemd1.Manager",
+			NULL, &error);
+
+	if (!proxy) {
+		g_error_free (error);
+		return FALSE;
+	}
+
+	variant = g_dbus_proxy_call_sync (proxy, "GetUnit",
+			g_variant_new ("(s)", service_name),
+			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+
+	if (!variant) {
+		g_error_free (error);
+	} else {
+		g_variant_get (variant, "(o)", object_path);
+		g_variant_unref (variant);
+	}
+
+	g_object_unref (proxy);
+
+	return TRUE;
+}
+
+static gboolean
+is_systemd_service_active (const gchar *service_name)
+{
+	gboolean ret = FALSE;
+
+	GVariant   *variant;
+	GDBusProxy *proxy;
+	GError     *error = NULL;
+	gchar      *obj_path = NULL;
+
+	get_object_path (&obj_path, service_name);
+	if (!obj_path) {
+		goto done;
+	}
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE, NULL,
+			"org.freedesktop.systemd1",
+			obj_path,
+			"org.freedesktop.DBus.Properties",
+			NULL, &error);
+
+	if (!proxy)
+		goto done;
+
+	variant = g_dbus_proxy_call_sync (proxy, "GetAll",
+			g_variant_new ("(s)", "org.freedesktop.systemd1.Unit"),
+			G_DBUS_CALL_FLAGS_NONE, -1, NULL, &error);
+
+	if (variant) {
+		gchar *output = NULL;
+		GVariant *asv = g_variant_get_child_value(variant, 0);
+		GVariant *value = g_variant_lookup_value(asv, "ActiveState", NULL);
+		if(value && g_variant_is_of_type(value, G_VARIANT_TYPE_STRING)) {
+			output = g_variant_dup_string(value, NULL);
+			if (g_strcmp0 (output, "active") == 0) {
+				ret = TRUE;;
+			}
+			g_free (output);
+		}
+
+		g_variant_unref (variant);
+	}
+
+	g_object_unref (proxy);
+
+done:
+	if (error)
+		g_error_free (error);
+
+	return ret;
 }
 
 json_object *
@@ -193,6 +308,32 @@ error:
 	return g_strdup ("applications-other");
 }
 
+static gboolean
+has_application (GList *list, GAppInfo *appinfo)
+{
+	const gchar *id;
+
+	if (appinfo) {
+		id = g_app_info_get_id (appinfo);
+	} else {
+		id = NULL;
+	}
+
+	if (!id) return FALSE;
+
+	GList *l = NULL;
+	for (l = list; l; l = l->next) {
+		GAppInfo *appinfo = G_APP_INFO (l->data);
+		if (appinfo) {
+			const gchar *_id = g_app_info_get_id (appinfo);
+			if (g_str_equal (id, _id))
+				return TRUE;
+		}
+	}
+
+	return FALSE;
+}
+
 static gchar *
 get_desktop_directory (json_object *obj)
 {
@@ -276,6 +417,146 @@ create_desktop_file (json_object *obj, const gchar *dt_file_name, gint num)
 }
 
 static gboolean
+desktop_has_name (const gchar *id, const gchar *name)
+{
+	gboolean ret = FALSE;
+
+	gchar *desktop = g_build_filename ("/usr/share/applications", id, NULL);
+	GKeyFile *keyfile = g_key_file_new ();
+
+    if (g_key_file_load_from_file (keyfile,
+                                   desktop,
+                                   G_KEY_FILE_KEEP_COMMENTS |
+                                   G_KEY_FILE_KEEP_TRANSLATIONS,
+                                   NULL)) {
+		gsize num_keys, i;
+		gchar **keys = g_key_file_get_keys (keyfile, "Desktop Entry", &num_keys, NULL);
+
+		for (i = 0; i < num_keys; i++) {
+			if (!g_str_has_prefix (keys[i], "Name"))
+				continue;
+
+			gchar *value = g_key_file_get_value (keyfile, "Desktop Entry", keys[i], NULL);
+			if (value) {
+				if (strstr (value, name) != NULL) {
+					ret = TRUE;
+				}
+			}
+			g_free (value);
+		}
+		g_strfreev (keys);
+	}
+	g_key_file_free (keyfile);
+	g_free (desktop);
+
+	return ret;
+}
+
+static gchar *
+find_desktop_by_id (GList *apps, const gchar *find_str)
+{
+	GList *l = NULL;
+	gchar *ret = NULL;
+
+	if (!find_str || g_str_equal (find_str, ""))
+		return NULL;
+
+	for (l = apps; l; l = l->next) {
+		GAppInfo *appinfo = G_APP_INFO (l->data);
+		if (appinfo) { 
+			const gchar *id = g_app_info_get_id (appinfo);
+
+			if (g_str_equal (id, find_str)) {
+				ret = g_strdup (id);
+				break;
+			}
+
+			if (desktop_has_name (id, find_str)) {
+				ret = g_strdup (id);
+				break;
+			}
+		}
+	}
+
+	return ret;
+}
+
+static gchar *
+get_dpms_off_time_from_json (const gchar *data)
+{
+	g_return_val_if_fail (data != NULL, NULL);
+
+	gchar *ret = NULL;
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+
+	if (jerr == json_tokener_success) {
+		json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL, *obj4 = NULL;
+		obj1 = JSON_OBJECT_GET (root_obj, "module");
+		obj2 = JSON_OBJECT_GET (obj1, "task");
+		obj3 = JSON_OBJECT_GET (obj2, "out");
+		obj4 = JSON_OBJECT_GET (obj3, "status");
+		if (obj4) {
+			const char *val = json_object_get_string (obj4);
+			if (val && g_strcmp0 (val, "200") == 0) {
+				json_object *obj = JSON_OBJECT_GET (obj3, "screen_time");
+				ret = g_strdup (json_object_get_string (obj));
+			}
+		}
+		json_object_put (root_obj);
+	}
+
+	return ret;
+}
+
+static gchar *
+get_blacklist_from_json (const gchar *data)
+{
+	g_return_val_if_fail (data != NULL, NULL);
+
+	gchar *ret = NULL;
+
+	enum json_tokener_error jerr = json_tokener_success;
+	json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+
+	if (jerr == json_tokener_success) {
+		json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL, *obj4 = NULL;
+		obj1 = JSON_OBJECT_GET (root_obj, "module");
+		obj2 = JSON_OBJECT_GET (obj1, "task");
+		obj3 = JSON_OBJECT_GET (obj2, "out");
+		obj4 = JSON_OBJECT_GET (obj3, "status");
+		if (obj4) {
+			const char *val = json_object_get_string (obj4);
+			if (val && g_strcmp0 (val, "200") == 0) {
+				json_object *obj = JSON_OBJECT_GET (obj3, "black_list");
+				ret = g_strdup (json_object_get_string (obj));
+			}
+		}
+		json_object_put (root_obj);
+	}
+
+	return ret;
+}
+
+static void
+save_application_blacklist (gchar *blacklist)
+{
+	g_return_if_fail (blacklist != NULL);
+
+	gchar **filters;
+	GSettings *settings;
+
+	filters = g_strsplit (blacklist, ",", -1);
+
+	settings = g_settings_new ("apps.gooroom-applauncher-plugin");
+	g_settings_set_strv (settings, "blacklist", (const char * const *) filters);
+	g_object_unref (settings);
+
+	g_strfreev (filters);
+}
+
+static gboolean
 restart_dockbarx_async (gpointer data)
 {
 	g_spawn_command_line_sync ("xfce4-panel -r", NULL, NULL, NULL, NULL);
@@ -291,19 +572,19 @@ restart_dockbarx_async (gpointer data)
 	return FALSE;
 }
 
-static gboolean
-run_control_center_async (gpointer data)
-{
-	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
-	if (cmd) {
-		gchar *cmdline = g_strdup_printf ("%s user", cmd);
-		g_spawn_command_line_async (cmdline, NULL);
-		g_free (cmdline);
-	}
-	g_free (cmd);
-
-	return FALSE;
-}
+//static gboolean
+//run_control_center_async (gpointer data)
+//{
+//	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
+//	if (cmd) {
+//		gchar *cmdline = g_strdup_printf ("%s user", cmd);
+//		g_spawn_command_line_async (cmdline, NULL);
+//		g_free (cmdline);
+//	}
+//	g_free (cmd);
+//
+//	return FALSE;
+//}
 
 static gboolean
 find_launcher (GSList *list, const gchar *launcher)
@@ -484,8 +765,9 @@ check_dockbarx_launchers (gpointer data)
 			gtk_window_set_title (GTK_WINDOW (dialog), _("Warning"));
 			gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
 
-			gtk_dialog_run (GTK_DIALOG (dialog));
-			gtk_widget_destroy (dialog);
+			g_signal_connect (dialog, "response", G_CALLBACK (gtk_widget_destroy), NULL);
+
+			gtk_widget_show (dialog);
 
 			return FALSE;
 		}
@@ -626,41 +908,41 @@ is_online_user (const gchar *username)
 	return ret;
 }
 
-static void
-show_message (const gchar *title, const gchar *msg, const gchar *icon)
-{
-	GtkWidget *dialog;
+//static void
+//show_message (const gchar *title, const gchar *msg, const gchar *icon)
+//{
+//	GtkWidget *dialog;
+//
+//	dialog = GTK_WIDGET (gtk_message_dialog_new (NULL,
+//				GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,
+//				GTK_MESSAGE_INFO,
+//				GTK_BUTTONS_OK,
+//				NULL));
+//
+//	gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), msg, NULL);
+//
+//	gtk_window_set_title (GTK_WINDOW (dialog), title);
+//	gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
+//
+//	gtk_dialog_run (GTK_DIALOG (dialog));
+//	gtk_widget_destroy (dialog);
+//}
 
-	dialog = GTK_WIDGET (gtk_message_dialog_new (NULL,
-				GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,
-				GTK_MESSAGE_INFO,
-				GTK_BUTTONS_OK,
-				NULL));
-
-	gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), msg, NULL);
-
-	gtk_window_set_title (GTK_WINDOW (dialog), title);
-	gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
-
-	gtk_dialog_run (GTK_DIALOG (dialog));
-	gtk_widget_destroy (dialog);
-}
-
-static gint
-check_shadow_expiry (long lastchg, int maxdays)
-{
-	gint warndays = 7;
-	gint daysleft = 9999;
-	long curdays;
-
-	curdays = (long)(time(NULL) / (60 * 60 * 24));
-
-	if ((curdays - lastchg) >= (maxdays - warndays)) {
-		daysleft = (gint)((lastchg + maxdays) - curdays);
-	}
-
-	return daysleft;
-}
+//static gint
+//check_shadow_expiry (long lastchg, int maxdays)
+//{
+//	gint warndays = 7;
+//	gint daysleft = 9999;
+//	long curdays;
+//
+//	curdays = (long)(time(NULL) / (60 * 60 * 24));
+//
+//	if ((curdays - lastchg) >= (maxdays - warndays)) {
+//		daysleft = (gint)((lastchg + maxdays) - curdays);
+//	}
+//
+//	return daysleft;
+//}
 
 static void
 list_sorted (gpointer key, gpointer value, gpointer user_data)
@@ -780,67 +1062,67 @@ handle_desktop_configuration (void)
 	g_free (data);
 }
 
-static void
-handle_password_expiration (void)
-{
-	gchar *data = get_grm_user_data ();
-
-	if (data) {
-		enum json_tokener_error jerr = json_tokener_success;
-		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
-		if (jerr == json_tokener_success) {
-			gboolean need_change_passwd = FALSE;
-			gboolean passwd_init = FALSE;
-			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
-			json_object *obj2_1 = NULL, *obj2_2 = NULL, *obj2_3 = NULL;
-
-			obj1 = JSON_OBJECT_GET (root_obj, "data");
-			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
-			obj2_1 = JSON_OBJECT_GET (obj2, "pwd_last_day");
-			obj2_2 = JSON_OBJECT_GET (obj2, "pwd_max_day");
-			obj2_3 = JSON_OBJECT_GET (obj2, "pwd_temp_yn");
-			if (obj2_3) {
-				const char *value = json_object_get_string (obj2_3);
-				if (value && g_strcmp0 (value, "Y") == 0) {
-					passwd_init = TRUE;
-					const gchar *msg = _("Your password has been issued temporarily.\nFor security reasons, please change your password immediately.");
-					show_message (_("Change Password"), msg, "dialog-error");
-					need_change_passwd = TRUE;
-				}
-			}
-
-			if (!passwd_init && obj2_1 && obj2_2) {
-				const char *value = json_object_get_string (obj2_1);
-				int max_days = json_object_get_int (obj2_2);
-				long last_days = strtoday (value);
-
-				if (last_days != -1 && max_days != -1) {
-					gint daysleft = check_shadow_expiry (last_days, max_days);
-
-					if (daysleft > 0 && daysleft < 9999) {
-						gchar *msg = g_strdup_printf (_("You have %d days to change your password.\nPlease change your password within %d days."), daysleft, daysleft);
-						show_message (_("Change Password"), msg, "dialog-warn");
-						g_free (msg);
-						need_change_passwd = TRUE;
-					} else if (daysleft == 0) {
-						show_message (_("Change Password"), _("Password change period is until today.\nPlease change your password today."), "dialog-warn");
-						need_change_passwd = TRUE;
-					} else if (daysleft < 0){
-						show_message (_("Change Password"), _("The password change period has already passed.\nFor security reasons, please change your password immediately."), "dialog-warn");
-						need_change_passwd = TRUE;
-					}
-				}
-			}
-			json_object_put (root_obj);
-
-			if (need_change_passwd) {
-				g_timeout_add (100, (GSourceFunc) run_control_center_async, NULL);
-			}
-		}
-	}
-
-	g_free (data);
-}
+//static void
+//handle_password_expiration (void)
+//{
+//	gchar *data = get_grm_user_data ();
+//
+//	if (data) {
+//		enum json_tokener_error jerr = json_tokener_success;
+//		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
+//		if (jerr == json_tokener_success) {
+//			gboolean need_change_passwd = FALSE;
+//			gboolean passwd_init = FALSE;
+//			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
+//			json_object *obj2_1 = NULL, *obj2_2 = NULL, *obj2_3 = NULL;
+//
+//			obj1 = JSON_OBJECT_GET (root_obj, "data");
+//			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
+//			obj2_1 = JSON_OBJECT_GET (obj2, "pwd_last_day");
+//			obj2_2 = JSON_OBJECT_GET (obj2, "pwd_max_day");
+//			obj2_3 = JSON_OBJECT_GET (obj2, "pwd_temp_yn");
+//			if (obj2_3) {
+//				const char *value = json_object_get_string (obj2_3);
+//				if (value && g_strcmp0 (value, "Y") == 0) {
+//					passwd_init = TRUE;
+//					const gchar *msg = _("Your password has been issued temporarily.\nFor security reasons, please change your password immediately.");
+//					show_message (_("Change Password"), msg, "dialog-error");
+//					need_change_passwd = TRUE;
+//				}
+//			}
+//
+//			if (!passwd_init && obj2_1 && obj2_2) {
+//				const char *value = json_object_get_string (obj2_1);
+//				int max_days = json_object_get_int (obj2_2);
+//				long last_days = strtoday (value);
+//
+//				if (last_days != -1 && max_days != -1) {
+//					gint daysleft = check_shadow_expiry (last_days, max_days);
+//
+//					if (daysleft > 0 && daysleft < 9999) {
+//						gchar *msg = g_strdup_printf (_("You have %d days to change your password.\nPlease change your password within %d days."), daysleft, daysleft);
+//						show_message (_("Change Password"), msg, "dialog-warn");
+//						g_free (msg);
+//						need_change_passwd = TRUE;
+//					} else if (daysleft == 0) {
+//						show_message (_("Change Password"), _("Password change period is until today.\nPlease change your password today."), "dialog-warn");
+//						need_change_passwd = TRUE;
+//					} else if (daysleft < 0){
+//						show_message (_("Change Password"), _("The password change period has already passed.\nFor security reasons, please change your password immediately."), "dialog-warn");
+//						need_change_passwd = TRUE;
+//					}
+//				}
+//			}
+//			json_object_put (root_obj);
+//
+//			if (need_change_passwd) {
+//				g_timeout_add (100, (GSourceFunc) run_control_center_async, NULL);
+//			}
+//		}
+//	}
+//
+//	g_free (data);
+//}
 
 static void
 reload_grac_service_done_cb (GObject *source, GAsyncResult *res, gpointer data)
@@ -853,73 +1135,119 @@ reload_grac_service_done_cb (GObject *source, GAsyncResult *res, gpointer data)
 static void
 reload_grac_service (void)
 {
-	if (!agent_proxy) {
-		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-				G_DBUS_CALL_FLAGS_NONE,
-				NULL,
-				"kr.gooroom.agent",
-				"/kr/gooroom/agent",
-				"kr.gooroom.agent",
-				NULL,
+	if (!authenticate ("kr.gooroom.autostart.program.systemctl"))
+		return;
+
+	GDBusProxy  *proxy = NULL;
+	gboolean     success = FALSE;
+	const gchar *service_name = "grac-device-daemon.service";
+
+	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
+			G_DBUS_CALL_FLAGS_NONE,
+			NULL,
+			"org.freedesktop.systemd1",
+			"/org/freedesktop/systemd1",
+			"org.freedesktop.systemd1.Manager",
+			NULL, NULL);
+
+	if (proxy) {
+		GVariant *variant = NULL;
+		variant = g_dbus_proxy_call_sync (proxy, "RestartUnit",
+				g_variant_new ("(ss)", service_name, "replace"),
+				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
+
+		if (variant) {
+			g_variant_unref (variant);
+			success = TRUE;
+		}
+
+		g_object_unref (proxy);
+	}
+
+#if 0
+	if (!success) {
+		GtkWidget *dlg = gtk_message_dialog_new (NULL,
+				GTK_DIALOG_MODAL,
+				GTK_MESSAGE_INFO,
+				GTK_BUTTONS_CLOSE,
 				NULL);
-	}
 
-	if (agent_proxy) {
-		const gchar *arg = "{\"module\":{\"module_name\":\"daemon_control\",\"task\":{\"task_name\":\"daemon_reload\",\"in\":{\"service\":\"grac-device-daemon.service\"}}}}";
+		const gchar *secondary_text = _("Failed to restart GRAC service.\nPlease login again.");
+		gtk_window_set_title (GTK_WINDOW (dlg), _("GRAC Service Start Failure"));
+		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dlg), "%s", secondary_text);
+		g_signal_connect (dlg, "response", G_CALLBACK (gtk_widget_destroy), NULL);
 
-		g_dbus_proxy_call (agent_proxy, "do_task",
-			g_variant_new ("(s)", arg),
-			G_DBUS_CALL_FLAGS_NONE, -1, NULL,
-			reload_grac_service_done_cb, NULL);
+		gtk_widget_show (dlg);
 	}
+#endif
 }
 
 static void
-dpms_off_time_set (gpointer user_data)
+request_dpms_off_time_done_cb (GObject      *source_object,
+                               GAsyncResult *res,
+                               gpointer      user_data)
 {
-	XfconfChannel *channel = XFCONF_CHANNEL (user_data);
+	GVariant *variant;
+	gchar *data = NULL;
+	XfconfChannel *channel;
 
-	gchar *data = get_grm_user_data ();
+	channel = XFCONF_CHANNEL (user_data);
+
+	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
+	if (variant) {
+		GVariant *v;
+		g_variant_get (variant, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		g_variant_unref (variant);
+	}
 
 	if (data) {
-		enum json_tokener_error jerr = json_tokener_success;
-		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
-		if (jerr == json_tokener_success) {
-			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
-
-			obj1 = JSON_OBJECT_GET (root_obj, "data");
-			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
-			obj3 = JSON_OBJECT_GET (obj2, "dpms_off_time");
-			if (obj3) {
-				int dpms_off_time = json_object_get_int (obj3);
-				if (dpms_off_time >= 0 && dpms_off_time <= 60) {
-					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", dpms_off_time);
-					xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", dpms_off_time);
-				}
-			}
-			json_object_put (root_obj);
-		}
+		gchar *value = get_dpms_off_time_from_json (data);
+		dpms_off_time_update (atoi (value), channel);
+		g_free (value);
+		g_free (data);
 	}
-
-	g_free (data);
 }
 
 static void
-agent_signal_cb (GDBusProxy *proxy, gchar *sender_name, gchar *signal_name, GVariant *parameters, gpointer user_data)
+dpms_off_time_set (gpointer data)
 {
+	agent_proxy = agent_proxy_get ();
+	if (agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"dpms_off_time\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+
+		g_dbus_proxy_call (agent_proxy,
+                           "do_task",
+                           g_variant_new ("(s)", arg),
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           request_dpms_off_time_done_cb,
+                           data);
+		g_free (arg);
+	}
+}
+
+static void
+agent_signal_cb (GDBusProxy *proxy,
+                 gchar *sender_name,
+                 gchar *signal_name,
+                 GVariant *parameters,
+                 gpointer user_data)
+{
+	g_return_if_fail (user_data != NULL);
+
+	XfconfChannel *channel = XFCONF_CHANNEL (user_data);
+
 	if (g_str_equal (signal_name, "dpms_on_x_off")) {
-
-		g_return_if_fail (user_data != NULL);
-
-		XfconfChannel *channel = XFCONF_CHANNEL (user_data);
-
 		gint32 value = 0;
 		g_variant_get (parameters, "(i)", &value);
-
-		if (value >= 0 && value <= 60) {
-			xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-ac-off", value);
-			xfconf_channel_set_uint (channel, "/xfce4-power-manager/dpms-on-battery-off", value);
-		}
+		dpms_off_time_update (value, channel);
 	} else if (g_str_equal (signal_name, "update_operation")) {
 		gint32 value = -1;
 		g_variant_get (parameters, "(i)", &value);
@@ -949,25 +1277,78 @@ agent_signal_cb (GDBusProxy *proxy, gchar *sender_name, gchar *signal_name, GVar
 		notify_notification_set_timeout (notification, NOTIFY_EXPIRES_DEFAULT);
 		notify_notification_show (notification, NULL);
 		g_object_unref (notification);
+	} else if (g_str_equal (signal_name, "app_black_list")) {
+		GVariant *v = NULL;
+		gchar *blacklist = NULL;
+		g_variant_get (parameters, "(v)", &v);
+		if (v) {
+			blacklist = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+
+		if (blacklist) {
+			save_application_blacklist (blacklist);
+			g_free (blacklist);
+		}
 	}
 }
 
 static void
 gooroom_agent_bind_signal (gpointer data)
 {
-	if (!agent_proxy) {
-		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-				G_DBUS_CALL_FLAGS_NONE,
-				NULL,
-				"kr.gooroom.agent",
-				"/kr/gooroom/agent",
-				"kr.gooroom.agent",
-				NULL,
-				NULL);
-	}
-
+	agent_proxy = agent_proxy_get ();
 	if (agent_proxy) {
 		g_signal_connect (agent_proxy, "g-signal", G_CALLBACK (agent_signal_cb), data);
+	}
+}
+
+static void
+request_app_blacklist_done_cb (GObject      *source_object,
+                               GAsyncResult *res,
+                               gpointer      user_data)
+{
+	GVariant *variant;
+	gchar *data = NULL;
+
+	variant = g_dbus_proxy_call_finish (G_DBUS_PROXY (source_object), res, NULL);
+	if (variant) {
+		GVariant *v;
+		g_variant_get (variant, "(v)", &v);
+		if (v) {
+			data = g_variant_dup_string (v, NULL);
+			g_variant_unref (v);
+		}
+		g_variant_unref (variant);
+	}
+
+	if (data) {
+		gchar *blacklist = get_blacklist_from_json (data);
+		if (blacklist) {
+			save_application_blacklist (blacklist);
+			g_free (blacklist);
+		}
+		g_free (data);
+	}
+}
+
+static void
+application_blacklist_update ()
+{
+	agent_proxy = agent_proxy_get ();
+	if (agent_proxy) {
+		const gchar *json = "{\"module\":{\"module_name\":\"config\",\"task\":{\"task_name\":\"get_app_list\",\"in\":{\"login_id\":\"%s\"}}}}";
+
+		gchar *arg = g_strdup_printf (json, g_get_user_name ());
+
+		g_dbus_proxy_call (agent_proxy,
+                           "do_task",
+                           g_variant_new ("(s)", arg),
+                           G_DBUS_CALL_FLAGS_NONE,
+                           -1,
+                           NULL,
+                           request_app_blacklist_done_cb,
+                           NULL);
+		g_free (arg);
 	}
 }
 
@@ -997,58 +1378,7 @@ logout_session_cb (gpointer data)
 	return FALSE;
 }
 
-static gboolean
-start_job_on_offline (gpointer data)
-{
-	if (!authenticate ("kr.gooroom.autostart.program.systemctl"))
-		return FALSE;
-
-	GDBusProxy  *proxy = NULL;
-	gboolean     success = FALSE;
-	const gchar *service_name = "grac-device-daemon.service";
-
-	proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-			G_DBUS_CALL_FLAGS_NONE,
-			NULL,
-			"org.freedesktop.systemd1",
-			"/org/freedesktop/systemd1",
-			"org.freedesktop.systemd1.Manager",
-			NULL, NULL);
-
-	if (proxy) {
-		GVariant *variant = NULL;
-		variant = g_dbus_proxy_call_sync (proxy, "RestartUnit",
-				g_variant_new ("(ss)", service_name, "replace"),
-				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
-
-		if (variant) {
-			g_variant_unref (variant);
-			success = TRUE;
-		}
-
-		g_object_unref (proxy);
-	}
-
-	if (!success) {
-		GtkWidget *dlg = gtk_message_dialog_new (NULL,
-				GTK_DIALOG_MODAL,
-				GTK_MESSAGE_INFO,
-				GTK_BUTTONS_CLOSE,
-				NULL);
-
-		const gchar *secondary_text = _("Failed to restart GRAC service.\nPlease login again.");
-		gtk_window_set_title (GTK_WINDOW (dlg), _("GRAC Service Start Failure"));
-		gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dlg), "%s", secondary_text);
-		gtk_dialog_run (GTK_DIALOG (dlg));
-		gtk_widget_destroy (dlg);
-	}
-
-	g_timeout_add (200, (GSourceFunc) gtk_main_quit, NULL);
-
-	return FALSE;
-}
-
-static gboolean
+static void
 start_job_on_online (gpointer data)
 {
 	gchar *file = g_strdup_printf ("/var/run/user/%d/gooroom/%s", getuid (), GRM_USER);
@@ -1059,16 +1389,6 @@ start_job_on_online (gpointer data)
 
 		/* handle the Direct URL items */
 		dock_launcher_update ();
-
-		dpms_off_time_set (data);
-
-		/* reload grac service */
-		reload_grac_service ();
-
-		gooroom_agent_bind_signal (data);
-
-		/* password expiration warning */
-//		handle_password_expiration ();
 	} else {
 		GtkWidget *message = gtk_message_dialog_new (NULL,
 				GTK_DIALOG_MODAL,
@@ -1081,13 +1401,33 @@ start_job_on_online (gpointer data)
 
 		gtk_window_set_title (GTK_WINDOW (message), _("Terminating Session"));
 
+		g_signal_connect (message, "response", G_CALLBACK (gtk_widget_destroy), NULL);
+
 		g_timeout_add (1000 * 10, (GSourceFunc) logout_session_cb, data);
 
-		gtk_dialog_run (GTK_DIALOG (message));
-		gtk_widget_destroy (message);
+		gtk_widget_show (message);
 	}
 
 	g_free (file);
+}
+
+static gboolean
+start_job (gpointer data)
+{
+	remove_custom_desktop_files ();
+
+	if (is_online_user (g_get_user_name ())) {
+		start_job_on_online (data);
+	}
+
+	/* reload grac service */
+	reload_grac_service ();
+
+	dpms_off_time_set (data);
+
+	application_blacklist_update ();
+
+	gooroom_agent_bind_signal (data);
 
 	return FALSE;
 }
@@ -1095,6 +1435,7 @@ start_job_on_online (gpointer data)
 int
 main (int argc, char **argv)
 {
+	GError *error = NULL;
 	XfconfChannel *channel = NULL;
 
 	bindtextdomain (GETTEXT_PACKAGE, LOCALEDIR);
@@ -1103,34 +1444,14 @@ main (int argc, char **argv)
 
 	gtk_init (&argc, &argv);
 
-	if (!agent_proxy) {
-		agent_proxy = g_dbus_proxy_new_for_bus_sync (G_BUS_TYPE_SYSTEM,
-				G_DBUS_CALL_FLAGS_NONE,
-				NULL,
-				"kr.gooroom.agent",
-				"/kr/gooroom/agent",
-				"kr.gooroom.agent",
-				NULL,
-				NULL);
+	if (!xfconf_init (&error)) {
+		g_error ("Failed to connect to xfconf daemon: %s.", error->message);
+		g_error_free (error);
 	}
 
-	if (is_online_user (g_get_user_name ())) {
-		GError *error = NULL;
-		/* Initialize xfconf */
-		if (!xfconf_init (&error)) {
-			/* Print error and exit */
-			g_error ("Failed to connect to xfconf daemon: %s.", error->message);
-			g_error_free (error);
-		}
+	channel = xfconf_channel_new ("xfce4-power-manager");
 
-		channel = xfconf_channel_new ("xfce4-power-manager");
-
-		remove_custom_desktop_files ();
-
-		g_timeout_add (200, (GSourceFunc) start_job_on_online, channel);
-	} else {
-		g_timeout_add (200, (GSourceFunc) start_job_on_offline, NULL);
-	}
+	g_timeout_add (200, (GSourceFunc) start_job, channel);
 
 	gtk_main ();
 
