@@ -1152,7 +1152,7 @@ reload_grac_service (void)
 
 	if (proxy) {
 		GVariant *variant = NULL;
-		variant = g_dbus_proxy_call_sync (proxy, "RestartUnit",
+		variant = g_dbus_proxy_call_sync (proxy, "ReloadUnit",
 				g_variant_new ("(ss)", service_name, "replace"),
 				G_DBUS_CALL_FLAGS_NONE, -1, NULL, NULL);
 
