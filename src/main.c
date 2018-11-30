@@ -262,6 +262,12 @@ download_with_curl (const gchar *download_url, const gchar *download_path)
 	curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 10);
 	curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL);
 	curl_easy_setopt (curl, CURLOPT_WRITEDATA, fp);
+	if (g_str_has_prefix (curl, "https://")) {
+		const gchar *GOOROOM_CERT = "/etc/ssl/certs/gooroom_client.crt";
+		const gchar *GOOROOM_PRIVATE_KEY = "/etc/ssl/private/gooroom_client.key";
+		curl_easy_setopt (curl, CURLOPT_SSLCERT, GOOROOM_CERT);
+		curl_easy_setopt (curl, CURLOPT_SSLKEY, GOOROOM_PRIVATE_KEY);
+	}
 
 	res = curl_easy_perform (curl);
 	curl_easy_cleanup (curl);
@@ -544,16 +550,25 @@ save_application_blacklist (gchar *blacklist)
 {
 	g_return_if_fail (blacklist != NULL);
 
-	gchar **filters;
-	GSettings *settings;
+	GSettingsSchema *schema;
 
-	filters = g_strsplit (blacklist, ",", -1);
+	schema = g_settings_schema_source_lookup (g_settings_schema_source_get_default (),
+                                              "apps.gooroom-applauncher-plugin",
+                                              TRUE);
+	if (schema) {
+		gchar **filters;
+		GSettings *settings;
 
-	settings = g_settings_new ("apps.gooroom-applauncher-plugin");
-	g_settings_set_strv (settings, "blacklist", (const char * const *) filters);
-	g_object_unref (settings);
+		filters = g_strsplit (blacklist, ",", -1);
 
-	g_strfreev (filters);
+		settings = g_settings_new_full (schema, NULL, NULL);
+		g_settings_set_strv (settings, "blacklist", (const char * const *) filters);
+		g_object_unref (settings);
+
+		g_strfreev (filters);
+
+		g_settings_schema_unref (schema);
+	}
 }
 
 static gboolean
@@ -605,21 +620,42 @@ dockbarx_launchers_set (GSList *launchers)
 {
 	g_return_if_fail (launchers != NULL);
 
-	GConfClient *client = NULL;
+	guint i = 0;
+	GSList *l = NULL;
+	gchar **array = NULL;
+	gchar *cmd, *cmdline;
 
-	client = gconf_client_get_default ();
-	gconf_client_set_list (client, "/apps/dockbarx/launchers", GCONF_VALUE_STRING, launchers, NULL);
-	g_object_unref (client);
+//	gconftool-2 --type list --list-type string --set /apps/dockbarx/launchers '[glade;/usr/share/applications/gparted.desktop]'";
+	cmd = g_find_program_in_path ("gconftool-2");
+
+	array = g_new0 (gchar *, g_slist_length (launchers) + 1);
+
+	for (l = launchers; l; l = l->next) {
+		array[i++] = g_strdup ((gchar *)l->data);
+	}
+	array[i] = NULL;
+
+	gchar *strlist = g_strjoinv (",", array);
+
+	cmdline = g_strdup_printf ("%s --type list --list-type string --set /apps/dockbarx/launchers '[%s]'", cmd, strlist);
+
+	g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+
+	g_free (cmd);
+	g_free (cmdline);
+	g_free (strlist);
+	g_strfreev (array);
 }
 
 static GSList *
 dockbarx_launchers_get (void)
 {
-	GConfClient *client = NULL;
+	GConfClient *gconf;
 	GSList *old_launchers, *new_launchers = NULL;
 
-	client = gconf_client_get_default ();
-	old_launchers = gconf_client_get_list (client, "/apps/dockbarx/launchers", GCONF_VALUE_STRING, NULL);
+	gconf = gconf_client_get_default ();
+
+	old_launchers = gconf_client_get_list (gconf, "/apps/dockbarx/launchers", GCONF_VALUE_STRING, NULL);
 
 	GSList *l = NULL;
 	for (l = old_launchers; l != NULL; l = l->next) {
@@ -630,8 +666,8 @@ dockbarx_launchers_get (void)
 		}
 	}
 
-	g_object_unref (client);
 	g_slist_free_full (old_launchers, (GDestroyNotify) g_free);
+	g_object_unref (gconf);
 
 	return new_launchers;
 }
@@ -725,7 +761,7 @@ check_dockbarx_launchers (gpointer data)
 		}
 		not_matched_count = 0;
 
-		g_timeout_add (300, (GSourceFunc) restart_dockbarx_async, NULL);
+		g_timeout_add (500, (GSourceFunc) restart_dockbarx_async, NULL);
 
 		return FALSE;
 	}
@@ -735,6 +771,7 @@ check_dockbarx_launchers (gpointer data)
 	GSList *new_launchers = (GSList *)data;
 	GSList *old_launchers = dockbarx_launchers_get ();
 
+	// old_launchers and new_launchers must be same
 	for (l = new_launchers; l; l = l->next) {
 		const gchar *launcher = (const gchar *)l->data;
 		if (!find_launcher (old_launchers, launcher)) {
@@ -785,7 +822,7 @@ check_dockbarx_launchers (gpointer data)
 	not_matched_count = 0;
 
 	g_slist_free_full (new_launchers, (GDestroyNotify) g_free);
-	g_timeout_add (300, (GSourceFunc) restart_dockbarx_async, NULL);
+	g_timeout_add (500, (GSourceFunc) restart_dockbarx_async, NULL);
 
 	return FALSE;
 }
@@ -831,8 +868,6 @@ make_direct_url (json_object *root_obj, GSList *launchers)
 			g_free (dt_file_name);
 		}
 	}
-
-	dockbarx_launchers_set (launchers);
 }
 
 static void
@@ -864,7 +899,7 @@ dock_launcher_update (void)
 		enum json_tokener_error jerr = json_tokener_success;
 		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
 		if (jerr == json_tokener_success) {
-            json_object *obj1 = NULL, *obj2 = NULL, *obj2_1 = NULL, *obj3= NULL;
+			json_object *obj1 = NULL, *obj2 = NULL, *obj2_1 = NULL, *obj3= NULL;
 			obj1 = JSON_OBJECT_GET (root_obj, "data");
 			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
 			obj2_1 = JSON_OBJECT_GET (obj2, "user_id");
@@ -875,6 +910,7 @@ dock_launcher_update (void)
 					if (obj3) {
 						new_launchers = dockbarx_launchers_get ();
 						make_direct_url (obj3, new_launchers);
+						dockbarx_launchers_set (new_launchers);
 					}
 				}
 			}
