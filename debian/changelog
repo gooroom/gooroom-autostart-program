@@ -1,3 +1,15 @@
+gooroom-autostart-program (0.3.1+grm1u1) unstable; urgency=medium
+
+  [ cjheo ]
+  * [b5d16387] Add function to restart GRAC service using systemd when GPMS is not connected
+  * [ce805432] Added function to receive blacklist that are not visible in the App Launcher
+  * [882590c8] Reload GRAC Service instead of restarting
+  * [47bfef2c] Update function to download favicon and to register dockbar items
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Wed, 16 Jan 2019 10:24:58 +0900
+
 gooroom-autostart-program (0.2.1+grm1u1) unstable; urgency=medium
 
   [ cjheo ]
