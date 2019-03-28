@@ -26,5 +26,5 @@ Standards-Version: 3.9.8
 
 Package: gooroom-autostart-program
 Architecture: any
-Depends: ${misc:Depends}, gconf2, xfconf
+Depends: ${misc:Depends}, gconf2, xfconf, wget
 Description: Gooroom Autostart Program.

@@ -240,44 +240,18 @@ strtoday (const char *date /* yyyy-mm-dd */)
 static gboolean
 download_with_curl (const gchar *download_url, const gchar *download_path)
 {
-	CURL *curl;
-	CURLcode res = CURLE_OK;
 	gboolean ret = FALSE;
 
-	g_return_val_if_fail (download_url != NULL, FALSE);
-	g_return_val_if_fail (download_path != NULL, FALSE);
+	if (!download_url || !download_path)
+		return FALSE;
 
-	curl_global_init (CURL_GLOBAL_ALL);
-
-	curl = curl_easy_init (); 
-
-	if (!curl)
-		goto error;
-
-	FILE *fp = fopen (download_path, "wb");
-	if (!fp)
-		goto error;
-
-	curl_easy_setopt (curl, CURLOPT_URL, download_url);
-	curl_easy_setopt (curl, CURLOPT_CONNECTTIMEOUT, 10);
-	curl_easy_setopt (curl, CURLOPT_WRITEFUNCTION, NULL);
-	curl_easy_setopt (curl, CURLOPT_WRITEDATA, fp);
-	if (g_str_has_prefix (curl, "https://")) {
-		const gchar *GOOROOM_CERT = "/etc/ssl/certs/gooroom_client.crt";
-		const gchar *GOOROOM_PRIVATE_KEY = "/etc/ssl/private/gooroom_client.key";
-		curl_easy_setopt (curl, CURLOPT_SSLCERT, GOOROOM_CERT);
-		curl_easy_setopt (curl, CURLOPT_SSLKEY, GOOROOM_PRIVATE_KEY);
+	gchar *cmd = g_find_program_in_path ("wget");
+	if (cmd) {
+		gchar *cmdline = g_strdup_printf ("%s --no-check-certificate %s -q -O %s", cmd, download_url, download_path);
+		ret = g_spawn_command_line_sync (cmdline, NULL, NULL, NULL, NULL);
+		g_free (cmdline);
 	}
-
-	res = curl_easy_perform (curl);
-	curl_easy_cleanup (curl);
-
-	fclose(fp);
-
-	ret = (res == CURLE_OK);
-
-error:
-	curl_global_cleanup ();
+	g_free (cmd);
 
 	return ret;
 }
@@ -292,7 +266,8 @@ download_favicon (const gchar *favicon_url, gint num)
 	favicon_path = g_strdup_printf ("%s/favicon-%.02d", g_get_user_cache_dir (), num);
 	g_remove (favicon_path);
 
-	download_with_curl (favicon_url, favicon_path);
+	if (!download_with_curl (favicon_url, favicon_path))
+		goto error;
 
 	if (!g_file_test (favicon_path, G_FILE_TEST_EXISTS))
 		goto error;
