@@ -1,19 +1,19 @@
 /*
- * Copyright (c) 2015 - 2017 gooroom <gooroom@gooroom.kr>
+ *  Copyright (c) 2015-2019 Gooroom <gooroom@gooroom.kr>
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 3 of the License, or
- * (at your option) any later version.
+ *  This program is free software; you can redistribute it and/or
+ *  modify it under the terms of the GNU General Public License
+ *  as published by the Free Software Foundation; either version 2
+ *  of the License, or (at your option) any later version.
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
+ *  This program is distributed in the hope that it will be useful,
+ *  but WITHOUT ANY WARRANTY; without even the implied warranty of
+ *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ *  GNU General Public License for more details.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
  */
 
 #ifdef HAVE_CONFIG_H
@@ -562,20 +562,6 @@ restart_dockbarx_async (gpointer data)
 	return FALSE;
 }
 
-//static gboolean
-//run_control_center_async (gpointer data)
-//{
-//	gchar *cmd = g_find_program_in_path ("gooroom-control-center");
-//	if (cmd) {
-//		gchar *cmdline = g_strdup_printf ("%s user", cmd);
-//		g_spawn_command_line_async (cmdline, NULL);
-//		g_free (cmdline);
-//	}
-//	g_free (cmd);
-//
-//	return FALSE;
-//}
-
 static gboolean
 find_launcher (GSList *list, const gchar *launcher)
 {
@@ -919,42 +905,6 @@ is_online_user (const gchar *username)
 	return ret;
 }
 
-//static void
-//show_message (const gchar *title, const gchar *msg, const gchar *icon)
-//{
-//	GtkWidget *dialog;
-//
-//	dialog = GTK_WIDGET (gtk_message_dialog_new (NULL,
-//				GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,
-//				GTK_MESSAGE_INFO,
-//				GTK_BUTTONS_OK,
-//				NULL));
-//
-//	gtk_message_dialog_format_secondary_text (GTK_MESSAGE_DIALOG (dialog), msg, NULL);
-//
-//	gtk_window_set_title (GTK_WINDOW (dialog), title);
-//	gtk_window_set_position (GTK_WINDOW (dialog), GTK_WIN_POS_CENTER);
-//
-//	gtk_dialog_run (GTK_DIALOG (dialog));
-//	gtk_widget_destroy (dialog);
-//}
-
-//static gint
-//check_shadow_expiry (long lastchg, int maxdays)
-//{
-//	gint warndays = 7;
-//	gint daysleft = 9999;
-//	long curdays;
-//
-//	curdays = (long)(time(NULL) / (60 * 60 * 24));
-//
-//	if ((curdays - lastchg) >= (maxdays - warndays)) {
-//		daysleft = (gint)((lastchg + maxdays) - curdays);
-//	}
-//
-//	return daysleft;
-//}
-
 static void
 list_sorted (gpointer key, gpointer value, gpointer user_data)
 {
@@ -1072,68 +1022,6 @@ handle_desktop_configuration (void)
 
 	g_free (data);
 }
-
-//static void
-//handle_password_expiration (void)
-//{
-//	gchar *data = get_grm_user_data ();
-//
-//	if (data) {
-//		enum json_tokener_error jerr = json_tokener_success;
-//		json_object *root_obj = json_tokener_parse_verbose (data, &jerr);
-//		if (jerr == json_tokener_success) {
-//			gboolean need_change_passwd = FALSE;
-//			gboolean passwd_init = FALSE;
-//			json_object *obj1 = NULL, *obj2 = NULL, *obj3 = NULL;
-//			json_object *obj2_1 = NULL, *obj2_2 = NULL, *obj2_3 = NULL;
-//
-//			obj1 = JSON_OBJECT_GET (root_obj, "data");
-//			obj2 = JSON_OBJECT_GET (obj1, "loginInfo");
-//			obj2_1 = JSON_OBJECT_GET (obj2, "pwd_last_day");
-//			obj2_2 = JSON_OBJECT_GET (obj2, "pwd_max_day");
-//			obj2_3 = JSON_OBJECT_GET (obj2, "pwd_temp_yn");
-//			if (obj2_3) {
-//				const char *value = json_object_get_string (obj2_3);
-//				if (value && g_strcmp0 (value, "Y") == 0) {
-//					passwd_init = TRUE;
-//					const gchar *msg = _("Your password has been issued temporarily.\nFor security reasons, please change your password immediately.");
-//					show_message (_("Change Password"), msg, "dialog-error");
-//					need_change_passwd = TRUE;
-//				}
-//			}
-//
-//			if (!passwd_init && obj2_1 && obj2_2) {
-//				const char *value = json_object_get_string (obj2_1);
-//				int max_days = json_object_get_int (obj2_2);
-//				long last_days = strtoday (value);
-//
-//				if (last_days != -1 && max_days != -1) {
-//					gint daysleft = check_shadow_expiry (last_days, max_days);
-//
-//					if (daysleft > 0 && daysleft < 9999) {
-//						gchar *msg = g_strdup_printf (_("You have %d days to change your password.\nPlease change your password within %d days."), daysleft, daysleft);
-//						show_message (_("Change Password"), msg, "dialog-warn");
-//						g_free (msg);
-//						need_change_passwd = TRUE;
-//					} else if (daysleft == 0) {
-//						show_message (_("Change Password"), _("Password change period is until today.\nPlease change your password today."), "dialog-warn");
-//						need_change_passwd = TRUE;
-//					} else if (daysleft < 0){
-//						show_message (_("Change Password"), _("The password change period has already passed.\nFor security reasons, please change your password immediately."), "dialog-warn");
-//						need_change_passwd = TRUE;
-//					}
-//				}
-//			}
-//			json_object_put (root_obj);
-//
-//			if (need_change_passwd) {
-//				g_timeout_add (100, (GSourceFunc) run_control_center_async, NULL);
-//			}
-//		}
-//	}
-//
-//	g_free (data);
-//}
 
 static void
 reload_grac_service_done_cb (GObject *source, GAsyncResult *res, gpointer data)

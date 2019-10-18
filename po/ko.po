@@ -1,80 +1,77 @@
 # Korean translations for gooroom-autostart-program package.
-# Copyright (C) 2016 THE gooroom-autostart-program'S COPYRIGHT HOLDER
+# Copyright (C) 2015-2019 THE gooroom-autostart-program'S COPYRIGHT HOLDER
 # This file is distributed under the same license as the gooroom-autostart-program package.
 #
+#, fuzzy
 msgid ""
 msgstr ""
-"Project-Id-Version: gooroom-autostart-program 0.1.0\n"
+"Project-Id-Version: gooroom-autostart-program 0.3.2\n"
 "Report-Msgid-Bugs-To: \n"
-"POT-Creation-Date: 2017-09-06 12:02+0000\n"
-"Language-Team: Korean\n"
+"POT-Creation-Date: 2019-10-18 15:55+0900\n"
+"Language-Team: Gooroom <gooroom@gooroom.kr>\n"
 "Language: ko\n"
 "MIME-Version: 1.0\n"
 "Content-Type: text/plain; charset=UTF-8\n"
 "Content-Transfer-Encoding: 8bit\n"
 "Plural-Forms: nplurals=1; plural=0;\n"
 
-#: ../data/gooroom-autostart-program.desktop.in.in.h:1
-msgid "Gooroom Autostart Program"
-msgstr "구름 자동시작 프로그램"
-
-#: ../src/main.c:448
-msgid ""
-"Your password has been issued temporarily.\n"
-"For security reasons, please change your password immediately."
-msgstr "임시로 발급된 패스워드 입니다.\n보안상 패스워드를 즉시 변경하시기 바랍니다."
-
-#: ../src/main.c:449 ../src/main.c:463 ../src/main.c:466 ../src/main.c:468
-msgid "Change Password"
-msgstr "비밀번호 변경"
-
-#: ../src/main.c:462
-#, c-format
-msgid ""
-"You have %d days to change your password.\n"
-"Please change your password within %d days."
-msgstr "패스워드 변경 기간이 %d일 남았습니다.\n%d일 이내에 패스워드를 변경하시기 바랍니다."
-
-#: ../src/main.c:466
-msgid ""
-"Password change period is until today.\n"
-"Please change your password today."
-msgstr "패스워드 변경 기간이 오늘까지 입니다.\n오늘 이내로 패스워드를 변경하시기 바랍니다."
-
-#: ../src/main.c:468
-msgid ""
-"The password change period has already passed.\n"
-"For security reasons, please change your password immediately."
-msgstr "패스워드 변경 기간이 이미 지났습니다.\n보안상 패스워드를 즉시 변경하시기 바랍니다."
-
-msgid ""
-"Could not found user's settings file.\n"
-"After 10 seconds, the user will be logged out."
-msgstr "사용자 환경설정 파일을 찾을 수 없습니다.\n10초 후 로그아웃 됩니다."
-
-msgid "Warning"
-msgstr "경고"
-
-msgid "Terminating Session"
-msgstr "세션 종료"
-
-msgid "Update Blocking Function"
-msgstr "업데이트 차단 기능"
-
-msgid "Update blocking function has been enabled."
-msgstr "업데이트 차단 기능이 활성화 되었습니다."
-
-msgid "Update blocking function has been disabled."
-msgstr "업데이트 차단 기능이 비활성화 되었습니다."
-
+#: ../src/main.c:759
 msgid "User Configuration Error"
 msgstr "사용자 환경설정 에러"
 
-msgid "Failed to set user's favorite menu.\nPlease login again."
-msgstr "즐겨찾기 메뉴설정에 실패하였습니다.\n다시 로그인하시기 바랍니다."
+#: ../src/main.c:762
+msgid ""
+"Failed to set user's favorite menu.\n"
+"Please login again."
+msgstr ""
+"즐겨찾기 메뉴설정에 실패하였습니다.\n"
+"다시 로그인하시기 바랍니다."
 
-msgid "Failed to restart GRAC service.\nPlease login again."
-msgstr "GRAC 서비스를 시작하지 못했습니다.\n다시 로그인하시기 바랍니다."
+#: ../src/main.c:763
+msgid "Warning"
+msgstr "경고"
 
+#: ../src/main.c:1074
+msgid ""
+"Failed to restart GRAC service.\n"
+"Please login again."
+msgstr ""
+"GRAC 서비스를 시작하지 못했습니다.\n"
+"다시 로그인하시기 바랍니다."
+
+#: ../src/main.c:1075
 msgid "GRAC Service Start Failure"
 msgstr "GRAC 서비스 시작 실패"
+
+#: ../src/main.c:1158
+msgid "Update Blocking Function"
+msgstr "업데이트 차단 기능"
+
+#: ../src/main.c:1160
+msgid "Update blocking function has been disabled."
+msgstr "업데이트 차단 기능이 비활성화 되었습니다."
+
+#: ../src/main.c:1163
+msgid "Update blocking function has been enabled."
+msgstr "업데이트 차단 기능이 활성화 되었습니다."
+
+#: ../src/main.c:1299
+msgid ""
+"Could not found user's settings file.\n"
+"After 10 seconds, the user will be logged out."
+msgstr ""
+"사용자 환경설정 파일을 찾을 수 없습니다.\n"
+"10초 후 로그아웃 됩니다."
+
+#: ../src/main.c:1301
+msgid "Terminating Session"
+msgstr "세션 종료"
+
+#: ../data/gooroom-autostart-program.desktop.in.in.h:1
+#: ../data/kr.gooroom.autostart.program.policy.in.in.h:1
+msgid "Gooroom Autostart Program"
+msgstr "구름 자동시작 프로그램"
+
+#: ../data/kr.gooroom.autostart.program.policy.in.in.h:2
+msgid "Authentication is required to control grac service."
+msgstr ""
