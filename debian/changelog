@@ -1,3 +1,12 @@
+gooroom-autostart-program (0.3.3+grm1u1) unstable; urgency=medium
+
+  [ user ]
+  * [74c0c618] Update sources regarding copyright
+
+  [ Gooroom Autobuilder ]
+
+ -- Gooroom Autobuilder <jenkins@gooroom.kr>  Thu, 31 Oct 2019 12:18:19 +0900
+
 gooroom-autostart-program (0.3.2+grm1u1) unstable; urgency=medium
 
   [ cjheo ]
